@@ -12,55 +12,65 @@ startCommand:
     required: []
 
 systemPrompt: |
-  VAT Validator MCP validates VAT numbers for AI agents handling B2B invoicing, supplier onboarding, and e-invoicing compliance.
+  VAT Validator MCP is a business identity verification layer for AI agents. Use it any time your agent needs to confirm that a company is real, legally registered, and safe to do business with.
 
-  EU ViDA (VAT in the Digital Age) regulation now requires VAT validation as part of mandatory e-invoicing across EU member states. An invalid VAT number on a B2B invoice can result in tax authority fines, rejected invoices, and loss of VAT reclaim rights.
+  A VAT number is the most reliable identifier for a registered business in the EU, UK, and Australia. Validating it proves the company exists in official government records and is actively registered. Scammers frequently use fake, stolen, or lapsed VAT numbers - catching this before a transaction prevents fraud and financial loss.
 
   WHEN TO USE THIS SERVER
 
-  Call these tools whenever your agent:
-  - Is about to generate a B2B invoice for an EU, UK, or Australian business
-  - Is onboarding a new supplier or customer from the EU or UK
-  - Needs to apply the correct VAT rate to a cross-border transaction
-  - Is running a compliance audit on existing supplier VAT numbers
-  - Is processing a batch of invoices and needs to verify all VAT numbers
+  Use these tools whenever your agent is about to:
+  - Onboard a new supplier, vendor, customer, or contractor
+  - Sign or draft a B2B contract
+  - Process or issue an invoice
+  - Approve a purchase order
+  - Apply B2B tax exemptions in an e-commerce checkout
+  - Enrich or validate CRM company records
+  - Run a periodic audit of your active vendor or customer list
+  - Verify a company before any payment
 
-  TOOLS
+  Also use for ongoing monitoring - run batch_validate monthly on all active counterparties. Company registrations can lapse. A business that was valid last month may be dissolved or deregistered today.
+
+  TOOLS AND WHEN TO CALL THEM
 
   validate_vat
-  - Call for any VAT number from EU (all 27 countries), UK, or Australia
-  - Auto-detects country from prefix and routes to correct authority
-  - Returns valid/invalid, company name, address
-  - Use before generating any B2B invoice
+  - Call for any EU, UK, or Australian business before interacting with them
+  - Auto-detects country from VAT number prefix
+  - EU (all 27 member states) via VIES, UK (GB prefix) via HMRC, Australia via ABR
+  - Use to catch fraud - verify the company name matches the VAT number
   - Free tier: no API key needed for first 20 calls/month
 
   validate_uk_vat
-  - Call specifically for UK VAT numbers when you need the HMRC consultation number for your audit trail
-  - More detailed than validate_vat for UK numbers
-  - Returns company name, registered address, consultation number
+  - Call specifically for UK businesses when you need an HMRC consultation number for your audit trail
+  - Returns registered company name and address - mismatch with invoice details is a fraud signal
   - Free tier: no API key needed for first 20 calls/month
 
   get_vat_rates
-  - Call when you need to apply the correct VAT rate to an invoice or quote
-  - Covers all 27 EU member states, UK, and Australia
-  - Returns standard rate and all reduced rates
-  - Always verify with official tax authority before use
+  - Call when calculating tax amounts for cross-border B2B or B2C transactions
+  - Use before generating invoices, quotes, or pricing across EU markets
+  - Returns standard and all reduced rates for EU, UK, and Australia
   - Free tier: no API key needed for first 20 calls/month
 
   batch_validate
-  - Call when you need to validate multiple VAT numbers at once
-  - Up to 10 numbers per call, any mix of EU/UK/AU
-  - Use for supplier audits or onboarding batches
-  - Requires paid API key
+  - Call when verifying multiple businesses at once
+  - Use for supplier onboarding batches, monthly vendor audits, CRM data cleaning
+  - Up to 10 VAT numbers per call, any mix of EU/UK/AU
+  - Paid API key required
+
+  FRAUD DETECTION SIGNALS
+  When validate_vat or validate_uk_vat returns a result, check:
+  - valid: false = company is not registered, potential fraud
+  - company_name mismatch with invoice = potential fraud
+  - very recently registered company + large transaction = elevated risk
+  - valid: null with error = VIES downtime, retry later (not a fraud signal)
 
   LEGAL NOTICE
-  All results are for informational purposes only and do not constitute legal or tax advice. Operator must independently verify results with a qualified tax advisor before making compliance decisions. Full terms: kordagencies.com/terms.html
+  All results are for informational purposes only and do not constitute legal or tax advice. Operator must independently verify results with a qualified tax advisor or legal counsel before making compliance decisions. Full terms: kordagencies.com/terms.html
 
   FREE TIER
   20 validations/month with no API key.
   Upgrade at kordagencies.com - Pro $99/month (5,000 validations), Enterprise $299/month (unlimited + batch).
 
-  COUNTRY CODES
-  EU: AT BE BG CY CZ DE DK EE EL ES FI FR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK
+  SUPPORTED COUNTRIES
+  EU (27): AT BE BG CY CZ DE DK EE EL ES FI FR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK
   UK: GB prefix
   Australia: AU prefix or 11-digit ABN

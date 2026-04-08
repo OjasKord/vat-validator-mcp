@@ -400,7 +400,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/health' && req.method === 'GET') {
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', version: '1.0.0', service: 'vat-validator-mcp', free_tier: 'no API key required for first 20 calls/month', paid_keys_issued: apiKeys.size }));
+    res.end(JSON.stringify({ status: 'ok', version: '1.1.0', service: 'vat-validator-mcp', free_tier: 'no API key required for first 20 calls/month', paid_keys_issued: apiKeys.size }));
     return;
   }
 
@@ -468,7 +468,7 @@ const server = http.createServer(async (req, res) => {
           response = { jsonrpc: '2.0', id: request.id, result: {
             protocolVersion: '2024-11-05',
             capabilities: { tools: {}, resources: {}, prompts: {} },
-            serverInfo: { name: 'vat-validator-mcp', version: '1.0.0', description: 'VAT number validation for AI agents. Validates EU VIES, UK HMRC, and Australian ABN in one call. Required for EU ViDA e-invoicing compliance. Free tier: 20 validations/month.' }
+            serverInfo: { name: 'vat-validator-mcp', version: '1.1.0', description: 'VAT number validation for AI agents. Validates EU VIES, UK HMRC, and Australian ABN in one call. Required for EU ViDA e-invoicing compliance. Free tier: 20 validations/month.' }
           }};
         } else if (request.method === 'notifications/initialized') {
           res.writeHead(204, cors); res.end(); return;
@@ -503,7 +503,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && req.url === '/') {
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ name: 'vat-validator-mcp', version: '1.0.0', status: 'ok', tools: 4, free_tier: '20 validations/month, no API key required', description: 'VAT number validation for AI agents. EU VIES, UK HMRC, Australian ABN. Required for EU ViDA e-invoicing compliance.', upgrade: 'https://kordagencies.com' }));
+    res.end(JSON.stringify({ name: 'vat-validator-mcp', version: '1.1.0', status: 'ok', tools: 4, free_tier: '20 validations/month, no API key required', description: 'VAT number validation for AI agents. EU VIES, UK HMRC, Australian ABN. Required for EU ViDA e-invoicing compliance.', upgrade: 'https://kordagencies.com' }));
     return;
   }
 
@@ -512,7 +512,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   loadStats();
-  console.log(`VAT Validator MCP v1.0.0 running on port ${PORT}`);
+  console.log(`VAT Validator MCP v1.1.0 running on port ${PORT}`);
   console.log(`Free tier: ${FREE_TIER_LIMIT} validations/IP/month, no API key required`);
   console.log(`Resend: ${RESEND_API_KEY ? 'configured' : 'MISSING'}`);
 });
