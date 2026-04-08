@@ -12,65 +12,84 @@ startCommand:
     required: []
 
 systemPrompt: |
-  VAT Validator MCP is a business identity verification layer for AI agents. Use it any time your agent needs to confirm that a company is real, legally registered, and safe to do business with.
+  VAT Validator MCP is a business identity verification and invoice fraud detection layer for AI agents.
 
-  A VAT number is the most reliable identifier for a registered business in the EU, UK, and Australia. Validating it proves the company exists in official government records and is actively registered. Scammers frequently use fake, stolen, or lapsed VAT numbers - catching this before a transaction prevents fraud and financial loss.
+  It combines official government VAT registry data (EU VIES, UK HMRC, Australian ABR) with AI-powered fraud analysis to give agents a complete picture before any B2B transaction.
+
+  TWO LAYERS OF INTELLIGENCE
+
+  Layer 1 - Government Registry Validation (validate_vat, validate_uk_vat, get_vat_rates, batch_validate)
+  Confirms a business is real and registered with official authorities.
+
+  Layer 2 - AI-Powered Fraud Analysis (analyse_vat_risk, compare_invoice_details)
+  Uses AI to synthesise registry data with transaction context to detect fraud signals that raw validation misses.
+  This is not a database lookup - it is intelligent analysis that catches subtle red flags.
 
   WHEN TO USE THIS SERVER
 
   Use these tools whenever your agent is about to:
   - Onboard a new supplier, vendor, customer, or contractor
+  - Process or approve an incoming invoice
   - Sign or draft a B2B contract
-  - Process or issue an invoice
-  - Approve a purchase order
-  - Apply B2B tax exemptions in an e-commerce checkout
-  - Enrich or validate CRM company records
-  - Run a periodic audit of your active vendor or customer list
-  - Verify a company before any payment
+  - Make a payment to an unfamiliar company
+  - Apply B2B tax exemptions in e-commerce
+  - Audit or enrich CRM company records
+  - Run periodic compliance checks on active counterparties
 
-  Also use for ongoing monitoring - run batch_validate monthly on all active counterparties. Company registrations can lapse. A business that was valid last month may be dissolved or deregistered today.
+  RECOMMENDED WORKFLOW FOR INVOICE PROCESSING
 
-  TOOLS AND WHEN TO CALL THEM
+  When your agent receives an invoice from a new or unverified supplier:
+  1. validate_vat - confirm the VAT number is real and active
+  2. compare_invoice_details - AI checks if invoice details match registry (catches impersonation fraud)
+  3. analyse_vat_risk - AI risk assessment with CLEAR/REVIEW/BLOCK recommendation
+  Only proceed with payment if recommendation is CLEAR.
+
+  RECOMMENDED WORKFLOW FOR SUPPLIER ONBOARDING
+
+  When adding a new supplier to your approved vendor list:
+  1. validate_vat - confirm registration
+  2. analyse_vat_risk - AI fraud signal check
+  3. batch_validate - periodic re-validation of all active suppliers monthly
+
+  TOOLS
 
   validate_vat
-  - Call for any EU, UK, or Australian business before interacting with them
-  - Auto-detects country from VAT number prefix
-  - EU (all 27 member states) via VIES, UK (GB prefix) via HMRC, Australia via ABR
-  - Use to catch fraud - verify the company name matches the VAT number
-  - Free tier: no API key needed for first 20 calls/month
+  - Validates any EU, UK, or Australian VAT number against live government registries
+  - Auto-detects country from prefix
+  - Free tier: first 20 calls/month, no API key needed
 
   validate_uk_vat
-  - Call specifically for UK businesses when you need an HMRC consultation number for your audit trail
-  - Returns registered company name and address - mismatch with invoice details is a fraud signal
-  - Free tier: no API key needed for first 20 calls/month
+  - UK-specific HMRC validation with consultation number for audit trail
+  - Free tier: first 20 calls/month, no API key needed
 
   get_vat_rates
-  - Call when calculating tax amounts for cross-border B2B or B2C transactions
-  - Use before generating invoices, quotes, or pricing across EU markets
-  - Returns standard and all reduced rates for EU, UK, and Australia
-  - Free tier: no API key needed for first 20 calls/month
+  - Current VAT rates for all 27 EU countries, UK, and Australia
+  - Free tier: first 20 calls/month, no API key needed
 
   batch_validate
-  - Call when verifying multiple businesses at once
-  - Use for supplier onboarding batches, monthly vendor audits, CRM data cleaning
-  - Up to 10 VAT numbers per call, any mix of EU/UK/AU
+  - Validate up to 10 VAT numbers in one call
+  - Use for supplier audits and onboarding batches
   - Paid API key required
 
-  FRAUD DETECTION SIGNALS
-  When validate_vat or validate_uk_vat returns a result, check:
-  - valid: false = company is not registered, potential fraud
-  - company_name mismatch with invoice = potential fraud
-  - very recently registered company + large transaction = elevated risk
-  - valid: null with error = VIES downtime, retry later (not a fraud signal)
+  analyse_vat_risk (AI-POWERED)
+  - Call after validate_vat when you need a fraud risk assessment
+  - AI analyses registry data + transaction context for fraud signals
+  - Returns CLEAR/REVIEW/BLOCK recommendation with specific reasons
+  - Catches: name mismatches, newly registered companies, dormant status, shell company indicators
+  - Free tier: first 20 calls/month, no API key needed
+
+  compare_invoice_details (AI-POWERED)
+  - Call when processing an invoice to verify supplier details match registry records
+  - AI compares invoice name/address/VAT against official registered data
+  - Flags discrepancies that indicate fraud, impersonation, or error
+  - Returns APPROVE/REVIEW/REJECT recommendation
+  - Free tier: first 20 calls/month, no API key needed
 
   LEGAL NOTICE
-  All results are for informational purposes only and do not constitute legal or tax advice. Operator must independently verify results with a qualified tax advisor or legal counsel before making compliance decisions. Full terms: kordagencies.com/terms.html
+  All results are for informational purposes only and do not constitute legal or tax advice.
+  Operator must independently verify results before making compliance decisions.
+  Full terms: kordagencies.com/terms.html
 
   FREE TIER
-  20 validations/month with no API key.
-  Upgrade at kordagencies.com - Pro $99/month (5,000 validations), Enterprise $299/month (unlimited + batch).
-
-  SUPPORTED COUNTRIES
-  EU (27): AT BE BG CY CZ DE DK EE EL ES FI FR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK
-  UK: GB prefix
-  Australia: AU prefix or 11-digit ABN
+  20 calls/month with no API key.
+  Upgrade at kordagencies.com - Pro $99/month (5,000 calls), Enterprise $299/month (unlimited + batch).
