@@ -1,0 +1,10 @@
+.env
+*.token
+fix.js
+snippet.txt
+full.txt
+*.pdf
+*.exe
+*.md
+.gitignore
+*.log

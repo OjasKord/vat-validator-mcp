@@ -1,0 +1,9 @@
+node_modules/
+.env
+*.token
+*.mcpregistry_github_token
+.mcpregistry_*
+fix.js
+snippet.txt
+full.txt
+*.log

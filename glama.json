@@ -1,0 +1,19 @@
+{
+  "name": "vat-validator-mcp",
+  "title": "VAT Validator MCP",
+  "description": "Validate EU, UK, and Australian VAT numbers for AI agents. EU VIES, UK HMRC, Australian ABN. Required for EU ViDA e-invoicing compliance.",
+  "version": "1.0.0",
+  "homepage": "https://kordagencies.com",
+  "license": "UNLICENSED",
+  "tools": [
+    { "name": "validate_vat", "description": "Validate any EU, UK, or Australian VAT number" },
+    { "name": "validate_uk_vat", "description": "Validate UK VAT number against HMRC with consultation number" },
+    { "name": "get_vat_rates", "description": "Get VAT rates by country for EU, UK, Australia" },
+    { "name": "batch_validate", "description": "Validate up to 10 VAT numbers in one call (paid)" }
+  ],
+  "pricing": {
+    "free": "20 validations/month, no API key",
+    "pro": "$99/month — 5,000 validations/month",
+    "enterprise": "$299/month — unlimited + batch"
+  }
+}
