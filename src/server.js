@@ -12,6 +12,7 @@ const STATS_KEY = process.env.STATS_KEY || 'ojas2026';
 const freeTierUsage = new Map();
 const usageLog = [];
 const FREE_TIER_LIMIT = 20;
+const FREE_TIER_WARNING = 16; // warn at 80% usage
 const apiKeys = new Map();
 const PLAN_LIMITS = { pro: 5000, enterprise: Infinity };
 
@@ -310,7 +311,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/health' && (req.method === 'GET' || req.method === 'HEAD')) {
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', version: '1.3.2', service: 'vat-validator-mcp', free_tier: 'no API key required for first 20 calls/month', paid_keys_issued: apiKeys.size }));
+    res.end(JSON.stringify({ status: 'ok', version: '1.4.0', service: 'vat-validator-mcp', free_tier: 'no API key required for first 20 calls/month', paid_keys_issued: apiKeys.size }));
     return;
   }
 
@@ -365,7 +366,7 @@ const server = http.createServer(async (req, res) => {
             req._accessWarning = access.warning; req._tier = access.tier;
           }
         }
-        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: '1.3.2', description: 'VAT validation + AI fraud detection for AI agents. EU VIES, UK HMRC, Australian ABN. AI-powered risk analysis and invoice verification. Free tier: 20 calls/month.' } } };
+        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: '1.4.0', description: 'VAT validation + AI fraud detection for AI agents. EU VIES, UK HMRC, Australian ABN. AI-powered risk analysis and invoice verification. Free tier: 20 calls/month.' } } };
         } else if (request.method === 'notifications/initialized') { res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') { response = { jsonrpc: '2.0', id: request.id, result: { tools } };
         } else if (request.method === 'resources/list') { response = { jsonrpc: '2.0', id: request.id, result: { resources: [] } };
@@ -378,6 +379,41 @@ const server = http.createServer(async (req, res) => {
           saveStats();
           const result = await executeTool(name, toolArgs || {});
           if (req._accessWarning) result._notice = req._accessWarning;
+
+          // Partial response for free tier
+          if (req._tier === 'free' && !result.error) {
+            const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+            const used = freeTierUsage.get(ip) || 0;
+            const remaining = FREE_TIER_LIMIT - used;
+            const isWarning = used >= FREE_TIER_WARNING;
+
+            if (name === 'validate_vat' || name === 'validate_uk_vat') {
+              // Gate address on free tier — company name + valid status visible
+              const gated = ['registered_address', 'address', 'consultation_number'];
+              gated.forEach(f => delete result[f]);
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Upgrade to Pro ($39/month) at kordagencies.com for full registered address and HMRC consultation number.';
+              result._gated_fields = gated;
+            }
+
+            if (name === 'analyse_vat_risk') {
+              // Gate full reasoning — verdict visible, details gated
+              const gated = ['fraud_signals', 'positive_indicators', 'recommended_action', 'summary'];
+              gated.forEach(f => delete result[f]);
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Upgrade to Pro ($39/month) at kordagencies.com for full fraud signal breakdown, positive indicators, and recommended action.';
+              result._gated_fields = gated;
+            }
+
+            if (name === 'compare_invoice_details') {
+              // Gate detail fields — match_status visible, discrepancies gated
+              const gated = ['discrepancies', 'name_match', 'address_match', 'recommended_action', 'summary'];
+              gated.forEach(f => delete result[f]);
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Upgrade to Pro ($39/month) at kordagencies.com for full discrepancy analysis and recommended action.';
+              result._gated_fields = gated;
+            }
+
+            if (isWarning) result._notice = 'Warning: only ' + remaining + ' free call' + (remaining === 1 ? '' : 's') + ' left this month. Upgrade to Pro at kordagencies.com to avoid interruption.';
+          }
+
           response = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
         } else { response = { jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found: ' + request.method } }; }
         res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
@@ -387,13 +423,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: '1.3.2', status: 'ok', tools: 6, free_tier: '20 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', upgrade: 'https://kordagencies.com' })); return; }
+  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: '1.4.0', status: 'ok', tools: 6, free_tier: '20 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', upgrade: 'https://kordagencies.com' })); return; }
   res.writeHead(404, cors); res.end(JSON.stringify({ error: 'Not found' }));
 });
 
 server.listen(PORT, () => {
   loadStats();
-  console.log('VAT Validator MCP v1.3.2 running on port ' + PORT);
+  console.log('VAT Validator MCP v1.4.0 running on port ' + PORT);
   console.log('Free tier: ' + FREE_TIER_LIMIT + ' calls/IP/month, no API key required');
   console.log('Resend: ' + (RESEND_API_KEY ? 'configured' : 'MISSING'));
   console.log('Anthropic: ' + (ANTHROPIC_API_KEY ? 'configured' : 'MISSING'));
