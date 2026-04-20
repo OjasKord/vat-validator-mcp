@@ -332,6 +332,7 @@ const tools = [
   { name: 'compare_invoice_details', description: 'Call this tool when your agent has received an invoice and needs to verify the supplier details on the invoice match official government registry records. Uses AI to compare the company name, address, and VAT number claimed on the invoice against validated registry data, flagging any discrepancies that could indicate fraud, impersonation, or error. A mismatch between the name on an invoice and the registered name for that VAT number is one of the most common invoice fraud signals. Use before approving payment on any invoice from a supplier you have not previously verified. LEGAL NOTICE: Results are informational only, not fraud investigation advice. Full terms: kordagencies.com/terms.html. Free tier: first 20 calls/month, no API key needed.', inputSchema: { type: 'object', properties: { invoice_company_name: { type: 'string', description: 'Company name as it appears on the invoice' }, invoice_address: { type: 'string', description: 'Address as it appears on the invoice (optional)' }, invoice_vat_number: { type: 'string', description: 'VAT number as it appears on the invoice' }, validation_result: { type: 'object', description: 'The full result object returned by validate_vat or validate_uk_vat for this VAT number' } }, required: ['invoice_company_name', 'invoice_vat_number', 'validation_result'] } }
 ];
 
+const sseClients = new Map();
 const server = http.createServer(async (req, res) => {
   const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, x-api-key, mcp-session-id, x-stats-key' };
   if (req.method === 'OPTIONS') { res.writeHead(200, cors); res.end(); return; }
@@ -382,6 +383,64 @@ const server = http.createServer(async (req, res) => {
       delete result.status;
       res.writeHead(status, { ...cors, 'Content-Type': 'application/json' });
       res.end(JSON.stringify(result));
+    });
+    return;
+  }
+
+  // SSE Transport for n8n MCP Client Tool node
+  if (req.url === '/sse' && req.method === 'GET') {
+    const sessionId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    res.writeHead(200, {
+      ...cors,
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    res.write('event: endpoint\n');
+    res.write('data: /messages?sessionId=' + sessionId + '\n\n');
+    sseClients.set(sessionId, res);
+    req.on('close', () => sseClients.delete(sessionId));
+    return;
+  }
+
+  if (req.url.startsWith('/messages') && req.method === 'POST') {
+    const sessionId = new URL(req.url, 'http://localhost').searchParams.get('sessionId');
+    const sseRes = sseClients.get(sessionId);
+    if (!sseRes) { res.writeHead(400, cors); res.end(JSON.stringify({ error: 'Unknown sessionId' })); return; }
+    let body = ''; req.on('data', c => body += c);
+    req.on('end', async () => {
+      try {
+        const request = JSON.parse(body);
+        let response;
+        if (request.method === 'initialize') {
+          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'vat-validator-mcp', version: '1.4.0' } } };
+        } else if (request.method === 'notifications/initialized') {
+          res.writeHead(204, cors); res.end(); return;
+        } else if (request.method === 'tools/list') {
+          response = { jsonrpc: '2.0', id: request.id, result: { tools } };
+        } else if (request.method === 'tools/call') {
+          const access = checkAccess(req);
+          if (!access.allowed) {
+            response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.reason, upgrade_url: 'https://kordagencies.com' } };
+          } else {
+            const { name, arguments: args } = request.params;
+            const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+            usageLog.push({ tool: name, tier: access.tier, time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
+            if (usageLog.length > 1000) usageLog.shift();
+            saveStats();
+            const result = await executeTool(name, args || {});
+            response = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
+          }
+        } else {
+          response = { jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found: ' + request.method } };
+        }
+        sseRes.write('event: message\n');
+        sseRes.write('data: ' + JSON.stringify(response) + '\n\n');
+        res.writeHead(202, cors); res.end();
+      } catch(e) {
+        res.writeHead(400, cors); res.end(JSON.stringify({ error: e.message }));
+      }
     });
     return;
   }
