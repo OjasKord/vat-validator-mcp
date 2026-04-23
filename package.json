@@ -1,18 +1,44 @@
 {
   "name": "vat-validator-mcp",
-  "version": "1.0.0",
+  "mcpName": "io.github.OjasKord/vat-validator-mcp",
+  "version": "1.4.2",
   "description": "VAT number validation for AI agents. EU VIES, UK HMRC, Australian ABN in one call.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js"
   },
-  "mcpName": "io.github.OjasKord/vat-validator-mcp",
-  "keywords": ["mcp", "vat", "vat-validation", "eu-vat", "hmrc", "vies", "e-invoicing", "tax-compliance", "b2b", "invoice", "vida"],
-  "author": "Ojas Kord <ojas@kordagencies.com>",
+  "keywords": [
+    "mcp",
+    "vat",
+    "vat-validation",
+    "eu-vat",
+    "hmrc",
+    "vies",
+    "e-invoicing",
+    "tax-compliance",
+    "b2b",
+    "invoice",
+    "vida",
+    "uk-vat",
+    "australian-abn",
+    "invoice-fraud",
+    "vat-fraud",
+    "validator",
+    "tax-verification",
+    "supplier-verification",
+    "compliance"
+  ],
+  "author": "Kord Agencies Pte Ltd <ojas@kordagencies.com>",
   "license": "UNLICENSED",
   "homepage": "https://kordagencies.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OjasKord/vat-validator-mcp"
+    "url": "git+https://github.com/OjasKord/vat-validator-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OjasKord/vat-validator-mcp/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
