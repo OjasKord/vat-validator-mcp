@@ -93,14 +93,66 @@ async function validateVIES(countryCode, vatNumber) {
   });
 }
 
-async function validateHMRC(vatNumber) {
+// HMRC OAuth 2.0 token cache
+let hmrcToken = null;
+let hmrcTokenExpiry = 0;
+
+async function getHMRCToken() {
+  const now = Date.now();
+  // Refresh if missing or within 5 minutes of expiry
+  if (hmrcToken && now < hmrcTokenExpiry - 300000) return hmrcToken;
+
+  const clientId = process.env.HMRC_CLIENT_ID || '';
+  const clientSecret = process.env.HMRC_CLIENT_SECRET || '';
+  const sandbox = process.env.HMRC_SANDBOX === 'true';
+  const hostname = sandbox ? 'test-api.service.hmrc.gov.uk' : 'api.service.hmrc.gov.uk';
+
+  if (!clientId || !clientSecret) return null;
+
+  const body = `client_secret=${encodeURIComponent(clientSecret)}&client_id=${encodeURIComponent(clientId)}&grant_type=client_credentials&scope=read%3Avat`;
+
   return new Promise((resolve) => {
-    const clean = vatNumber.replace(/^GB/i, '').replace(/\s/g, '');
     const req = https.request({
-      hostname: 'api.service.hmrc.gov.uk',
+      hostname,
+      path: '/oauth/token',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) }
+    }, res => {
+      let d = ''; res.on('data', c => d += c);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(d);
+          if (json.access_token) {
+            hmrcToken = json.access_token;
+            hmrcTokenExpiry = now + (json.expires_in || 14400) * 1000;
+            resolve(hmrcToken);
+          } else {
+            resolve(null);
+          }
+        } catch(e) { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(8000, () => { req.destroy(); resolve(null); });
+    req.write(body);
+    req.end();
+  });
+}
+
+async function validateHMRC(vatNumber) {
+  const clean = vatNumber.replace(/^GB/i, '').replace(/\s/g, '');
+  const token = await getHMRCToken();
+  if (!token) return { source: 'HMRC', error: 'HMRC credentials not configured' };
+
+  const sandbox = process.env.HMRC_SANDBOX === 'true';
+  const hostname = sandbox ? 'test-api.service.hmrc.gov.uk' : 'api.service.hmrc.gov.uk';
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname,
       path: '/organisations/vat/check-vat-number/lookup/' + clean,
       method: 'GET',
-      headers: { 'Accept': 'application/vnd.hmrc.2.0+json' }
+      headers: { 'Accept': 'application/vnd.hmrc.2.0+json', 'Authorization': 'Bearer ' + token }
     }, res => {
       let d = ''; res.on('data', c => d += c);
       res.on('end', () => {
@@ -339,7 +391,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/health' && (req.method === 'GET' || req.method === 'HEAD')) {
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', version: '1.4.1', service: 'vat-validator-mcp', free_tier: 'no API key required for first 20 calls/month', paid_keys_issued: apiKeys.size }));
+    res.end(JSON.stringify({ status: 'ok', version: '1.4.2', service: 'vat-validator-mcp', free_tier: 'no API key required for first 20 calls/month', paid_keys_issued: apiKeys.size }));
     return;
   }
 
@@ -355,7 +407,7 @@ const server = http.createServer(async (req, res) => {
     });
     const [vies, hmrc, abr, ai] = await Promise.all([
       depCheck('ec.europa.eu', '/taxation_customs/vies/rest-api/ms/DE/vat/123456789'),
-      depCheck('api.service.hmrc.gov.uk', '/organisations/vat/check-vat-number/lookup/123456789', { 'Accept': 'application/vnd.hmrc.2.0+json' }),
+      getHMRCToken().then(t => t ? { ok: true, status: 200, note: 'OAuth token acquired' } : { ok: false, status: 0, error: 'token fetch failed' }),
       depCheck('abr.business.gov.au', '/json/?abn=12345678901&guid=' + (process.env.ABR_GUID || 'f7b75e2e-6d6a-4c1c-a8d4-5b2e3c9d8f4a')),
       depCheck('api.anthropic.com', '/v1/models', { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' })
     ]);
@@ -414,7 +466,7 @@ const server = http.createServer(async (req, res) => {
         const request = JSON.parse(body);
         let response;
         if (request.method === 'initialize') {
-          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'vat-validator-mcp', version: '1.4.1' } } };
+          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'vat-validator-mcp', version: '1.4.2' } } };
         } else if (request.method === 'notifications/initialized') {
           res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') {
@@ -463,7 +515,7 @@ const server = http.createServer(async (req, res) => {
             req._accessWarning = access.warning; req._tier = access.tier;
           }
         }
-        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: '1.4.1', description: 'VAT validation + AI fraud detection for AI agents. EU VIES, UK HMRC, Australian ABN. AI-powered risk analysis and invoice verification. Free tier: 20 calls/month.' } } };
+        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: '1.4.2', description: 'VAT validation + AI fraud detection for AI agents. EU VIES, UK HMRC, Australian ABN. AI-powered risk analysis and invoice verification. Free tier: 20 calls/month.' } } };
         } else if (request.method === 'notifications/initialized') { res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') { response = { jsonrpc: '2.0', id: request.id, result: { tools } };
         } else if (request.method === 'resources/list') { response = { jsonrpc: '2.0', id: request.id, result: { resources: [] } };
@@ -520,13 +572,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: '1.4.1', status: 'ok', tools: 6, free_tier: '20 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', upgrade: 'https://kordagencies.com' })); return; }
+  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: '1.4.2', status: 'ok', tools: 6, free_tier: '20 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', upgrade: 'https://kordagencies.com' })); return; }
   res.writeHead(404, cors); res.end(JSON.stringify({ error: 'Not found' }));
 });
 
 server.listen(PORT, () => {
   loadStats();
-  console.log('VAT Validator MCP v1.4.1 running on port ' + PORT);
+  console.log('VAT Validator MCP v1.4.2 running on port ' + PORT);
   console.log('Free tier: ' + FREE_TIER_LIMIT + ' calls/IP/month, no API key required');
   console.log('Resend: ' + (RESEND_API_KEY ? 'configured' : 'MISSING'));
   console.log('Anthropic: ' + (ANTHROPIC_API_KEY ? 'configured' : 'MISSING'));
