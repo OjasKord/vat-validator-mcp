@@ -12,19 +12,15 @@
   "packages": [
     {
       "registryType": "npm",
-      "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "vat-validator-mcp",
       "version": "1.4.2",
-      "transport": {
-        "type": "stdio"
-      },
-      "environmentVariables": []
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        { "name": "ANTHROPIC_API_KEY", "description": "Anthropic API key for AI-powered fraud risk analysis", "isRequired": true, "isSecret": true },
+        { "name": "HMRC_CLIENT_ID", "description": "HMRC Developer Hub client ID for UK VAT validation", "isRequired": false, "isSecret": true },
+        { "name": "HMRC_CLIENT_SECRET", "description": "HMRC Developer Hub client secret for UK VAT validation", "isRequired": false, "isSecret": true }
+      ]
     }
   ],
-  "remotes": [
-    {
-      "type": "streamable-http",
-      "url": "https://vat-validator-mcp-production.up.railway.app"
-    }
-  ]
+  "remotes": [{ "type": "streamable-http", "url": "https://vat-validator-mcp-production.up.railway.app" }]
 }
