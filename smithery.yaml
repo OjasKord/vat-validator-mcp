@@ -1,3 +1,4 @@
+description: "VAT number validator for AI agents. EU VIES, UK HMRC, ABR. Invoice fraud detection included."
 startCommand:
   type: http
   url: https://vat-validator-mcp-production.up.railway.app
