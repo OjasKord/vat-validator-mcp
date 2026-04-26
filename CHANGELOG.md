@@ -5,6 +5,13 @@ Format: version number, date, what changed.
 
 ---
 
+## v1.4.5 — 2026-04-27
+
+### Added
+- `token_count` field on all tool responses — lets orchestrator budget ledgers track token cost per call
+- `/ready` endpoint — returns 200 when `ANTHROPIC_API_KEY`, `HMRC_CLIENT_ID`, and `HMRC_CLIENT_SECRET` are present, 503 otherwise
+- Phase 4 enhanced error objects: `category`, `retryable`, `retry_after_ms`, `fallback_tool`, `trace_id` on all 16 error paths across all 6 tools
+
 ## v1.4.4 — 2026-04-26
 
 ### Improved
