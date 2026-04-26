@@ -5,6 +5,13 @@ Format: version number, date, what changed.
 
 ---
 
+## v1.4.4 — 2026-04-26
+
+### Improved
+- All 6 tool descriptions rewritten with TCO framework: irresistibility opening, stale-cache penalty consequence, exact data source hostnames, prepaid bundle pricing last
+- Initialize serverInfo description rewritten for all 3 transport paths
+- compare_invoice_details: agent_action now returned in success response (PROCEED_WITH_PAYMENT / MANUAL_REVIEW_REQUIRED / BLOCK_PAYMENT derived from recommendation); discrepancies always returned as array
+
 ## v1.3.0 — 2026-04-09
 
 ### Added
