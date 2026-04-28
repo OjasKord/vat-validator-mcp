@@ -29,7 +29,7 @@
     "compliance"
   ],
   "author": "Kord Agencies Pte Ltd <ojas@kordagencies.com>",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "homepage": "https://kordagencies.com",
   "repository": {
     "type": "git",
