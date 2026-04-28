@@ -4,7 +4,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '1.4.5';
+const VERSION = '1.4.6';
+const PRO_UPGRADE_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
+const ENTERPRISE_UPGRADE_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PORT = process.env.PORT || 3000;
@@ -324,11 +326,11 @@ function checkAccess(req) {
   }
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   const calls = freeTierUsage.get(ip) || 0;
-  if (calls >= FREE_TIER_LIMIT) return { allowed: false, reason: 'Free tier limit of ' + FREE_TIER_LIMIT + ' validations/month reached. Upgrade to Pro ($99/month) at kordagencies.com for 5,000 validations/month.', upgrade_url: 'https://kordagencies.com', tier: 'free_limit_reached' };
+  if (calls >= FREE_TIER_LIMIT) return { allowed: false, reason: 'Free tier limit reached. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.', upgrade_url: PRO_UPGRADE_URL, tier: 'free_limit_reached' };
   freeTierUsage.set(ip, calls + 1);
   saveStats();
   const remaining = FREE_TIER_LIMIT - calls - 1;
-  return { allowed: true, tier: 'free', remaining, warning: remaining < 5 ? remaining + ' free validations remaining. Upgrade at kordagencies.com' : null };
+  return { allowed: true, tier: 'free', remaining, warning: remaining < 5 ? remaining + ' free validations remaining this month. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.' : null };
 }
 
 function verifyStripeSignature(body, sig, secret) {
@@ -494,7 +496,7 @@ const server = http.createServer(async (req, res) => {
         } else if (request.method === 'tools/call') {
           const access = checkAccess(req);
           if (!access.allowed) {
-            response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.reason, upgrade_url: 'https://kordagencies.com', agent_action: 'Inform user free tier quota is exhausted. Upgrade required at kordagencies.com' } };
+            response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.reason, upgrade_url: PRO_UPGRADE_URL, agent_action: 'Inform user free tier quota is exhausted. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.' } };
           } else {
             const { name, arguments: args } = request.params;
             const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -526,12 +528,12 @@ const server = http.createServer(async (req, res) => {
         if (request.method !== 'initialize' && request.method !== 'notifications/initialized') {
           if (request.method === 'tools/call' && request.params?.name === 'batch_validate') {
             const apiKey = req.headers['x-api-key'];
-            if (!apiKey) { res.writeHead(402, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32002, message: 'batch_validate requires a paid API key. Get yours at kordagencies.com - Pro $99/month.', upgrade_url: 'https://kordagencies.com', agent_action: 'Paid API key required for batch_validate. Upgrade at kordagencies.com' } })); return; }
+            if (!apiKey) { res.writeHead(402, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32002, message: 'batch_validate requires a paid API key. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.', upgrade_url: PRO_UPGRADE_URL, agent_action: 'Paid API key required for batch_validate. Get 500 calls for $8 at ' + PRO_UPGRADE_URL } })); return; }
             const record = apiKeys.get(apiKey);
             if (!record) { res.writeHead(401, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32001, message: 'Invalid API key. Get yours at kordagencies.com', agent_action: 'Invalid API key. Obtain a valid key at kordagencies.com' } })); return; }
           } else {
             const access = checkAccess(req);
-            if (!access.allowed) { res.writeHead(429, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.reason, upgrade_url: 'https://kordagencies.com', agent_action: 'Inform user free tier quota is exhausted. Upgrade required at kordagencies.com' } })); return; }
+            if (!access.allowed) { res.writeHead(429, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.reason, upgrade_url: PRO_UPGRADE_URL, agent_action: 'Inform user free tier quota is exhausted. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.' } })); return; }
             req._accessWarning = access.warning; req._tier = access.tier;
           }
         }
@@ -560,7 +562,7 @@ const server = http.createServer(async (req, res) => {
               // Gate address on free tier — company name + valid status visible
               const gated = ['registered_address', 'address', 'consultation_number'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Upgrade to Pro ($39/month) at kordagencies.com for full registered address and HMRC consultation number.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full registered address and HMRC consultation number.';
               result._gated_fields = gated;
             }
 
@@ -568,7 +570,7 @@ const server = http.createServer(async (req, res) => {
               // Gate full reasoning — verdict visible, details gated
               const gated = ['fraud_signals', 'positive_indicators', 'recommended_action', 'summary'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Upgrade to Pro ($39/month) at kordagencies.com for full fraud signal breakdown, positive indicators, and recommended action.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full fraud signal breakdown, positive indicators, and recommended action.';
               result._gated_fields = gated;
             }
 
@@ -576,11 +578,11 @@ const server = http.createServer(async (req, res) => {
               // Gate detail fields — match_status visible, discrepancies gated
               const gated = ['discrepancies', 'name_match', 'address_match', 'recommended_action', 'summary'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Upgrade to Pro ($39/month) at kordagencies.com for full discrepancy analysis and recommended action.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full discrepancy analysis and recommended action.';
               result._gated_fields = gated;
             }
 
-            if (isWarning) result._notice = 'Warning: only ' + remaining + ' free call' + (remaining === 1 ? '' : 's') + ' left this month. Upgrade to Pro at kordagencies.com to avoid interruption.';
+            if (isWarning) result._notice = 'Warning: only ' + remaining + ' free call' + (remaining === 1 ? '' : 's') + ' left this month. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.';
           }
 
           response = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
@@ -592,7 +594,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: VERSION, status: 'ok', tools: 6, free_tier: '20 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', upgrade: 'https://kordagencies.com' })); return; }
+  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: VERSION, status: 'ok', tools: 6, free_tier: '20 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', upgrade: PRO_UPGRADE_URL })); return; }
   res.writeHead(404, cors); res.end(JSON.stringify({ error: 'Not found' }));
 });
 

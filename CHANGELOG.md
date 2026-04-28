@@ -5,6 +5,12 @@ Format: version number, date, what changed.
 
 ---
 
+## v1.4.6 — 2026-04-28
+
+### Changed
+- Payment links updated to prepaid bundle URLs: 500 calls for $8 -- calls never expire
+- Free tier limit errors now direct agents to prepaid bundle purchase link directly
+
 ## v1.4.5 — 2026-04-27
 
 ### Added
