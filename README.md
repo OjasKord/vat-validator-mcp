@@ -1,3 +1,5 @@
+[![smithery badge](https://smithery.ai/badge/OjasKord/vat-validator-mcp)](https://smithery.ai/servers/OjasKord/vat-validator-mcp)
+
 # VAT Validator MCP — Business Identity Verification & Invoice Fraud Detection
 
 Validate EU, UK, and Australian VAT numbers against live government registries. Plus AI-powered fraud risk analysis and invoice verification — so your agent doesn't just know a VAT number is valid, it knows whether to proceed with the transaction.
