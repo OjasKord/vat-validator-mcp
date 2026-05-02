@@ -154,8 +154,8 @@ Every response includes `source_url` and `checked_at` so agents can verify exact
 | Plan | Validations | Price |
 |---|---|---|
 | Free | 20/month | No API key required |
-| Pro | 5,000/month | $39/month |
-| Enterprise | Unlimited + batch | $199/month |
+| Starter | 500-call bundle | $8 |
+| Pro | 2,000-call bundle | $28 |
 
 Upgrade at **[kordagencies.com](https://kordagencies.com)**
 
