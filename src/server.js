@@ -4,7 +4,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '1.4.7';
+const API_KEYS_FILE = '/tmp/vat_apikeys.json';
+const VERSION = '1.4.8';
 const PRO_UPGRADE_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
 const ENTERPRISE_UPGRADE_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
@@ -37,6 +38,22 @@ function loadStats() {
       console.log('Stats loaded: ' + freeTierUsage.size + ' IPs, ' + usageLog.length + ' calls');
     }
   } catch(e) { console.error('Stats load error:', e.message); }
+}
+
+function getMonthKey(ip) { return ip + ':' + new Date().toISOString().slice(0, 7); }
+
+function saveApiKeys() {
+  try { fs.writeFileSync(API_KEYS_FILE, JSON.stringify(Array.from(apiKeys.entries()))); } catch(e) { console.error('API keys save error:', e.message); }
+}
+
+function loadApiKeys() {
+  try {
+    if (fs.existsSync(API_KEYS_FILE)) {
+      const entries = JSON.parse(fs.readFileSync(API_KEYS_FILE, 'utf8'));
+      entries.forEach(([k, v]) => apiKeys.set(k, v));
+      console.log('API keys loaded: ' + apiKeys.size + ' keys');
+    }
+  } catch(e) { console.error('API keys load error:', e.message); }
 }
 
 function generateApiKey() { return 'vat_' + crypto.randomBytes(24).toString('hex'); }
@@ -325,9 +342,10 @@ function checkAccess(req) {
     return { allowed: true, tier: record.plan, record };
   }
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-  const calls = freeTierUsage.get(ip) || 0;
+  const monthKey = getMonthKey(ip);
+  const calls = freeTierUsage.get(monthKey) || 0;
   if (calls >= FREE_TIER_LIMIT) return { allowed: false, reason: 'Free tier limit reached. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.', upgrade_url: PRO_UPGRADE_URL, tier: 'free_limit_reached' };
-  freeTierUsage.set(ip, calls + 1);
+  freeTierUsage.set(monthKey, calls + 1);
   saveStats();
   const remaining = FREE_TIER_LIMIT - calls - 1;
   return { allowed: true, tier: 'free', remaining, warning: remaining < 5 ? remaining + ' free validations remaining this month. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.' : null };
@@ -370,6 +388,7 @@ async function handleStripeWebhook(body, sig) {
       if (email) {
         const apiKey = generateApiKey();
         apiKeys.set(apiKey, { email, plan, createdAt: new Date().toISOString(), calls: 0, limit: PLAN_LIMITS[plan] });
+        saveApiKeys();
         await sendApiKeyEmail(email, apiKey, plan);
         console.log('[vat] API key created for ' + email + ' (' + plan + ')');
         return { success: true, email, plan };
@@ -434,7 +453,8 @@ const server = http.createServer(async (req, res) => {
     const toolCounts = {};
     usageLog.forEach(e => { toolCounts[e.tool] = (toolCounts[e.tool] || 0) + 1; });
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ free_tier_unique_ips: freeTierUsage.size, free_tier_total_calls: totalFreeCalls, paid_keys_issued: apiKeys.size, tool_usage: toolCounts, recent_calls: usageLog.slice(-20).reverse() }));
+    const freeUniqueIPs = new Set(Array.from(freeTierUsage.keys()).map(k => k.split(':')[0])).size;
+    res.end(JSON.stringify({ free_tier_unique_ips: freeUniqueIPs, free_tier_total_calls: totalFreeCalls, paid_keys_issued: apiKeys.size, tool_usage: toolCounts, recent_calls: usageLog.slice(-20).reverse() }));
     return;
   }
 
@@ -554,7 +574,7 @@ const server = http.createServer(async (req, res) => {
           // Partial response for free tier
           if (req._tier === 'free' && !result.error) {
             const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-            const used = freeTierUsage.get(ip) || 0;
+            const used = freeTierUsage.get(getMonthKey(ip)) || 0;
             const remaining = FREE_TIER_LIMIT - used;
             const isWarning = used >= FREE_TIER_WARNING;
 
@@ -641,6 +661,7 @@ setupStdio();
 
 server.listen(PORT, () => {
   loadStats();
+  loadApiKeys();
   console.log('VAT Validator MCP v' + VERSION + ' running on port ' + PORT);
   console.log('Free tier: ' + FREE_TIER_LIMIT + ' calls/IP/month, no API key required');
   console.log('Resend: ' + (RESEND_API_KEY ? 'configured' : 'MISSING'));
