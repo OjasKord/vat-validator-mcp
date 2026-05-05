@@ -22,6 +22,49 @@ Or via Smithery:
 npx -y @smithery/cli@latest mcp add OjasKord/vat-validator-mcp
 ```
 
+## Harness Integration
+
+### Claude Code / Claude Desktop (.mcp.json)
+```json
+{
+  "mcpServers": {
+    "vat-validator": {
+      "type": "http",
+      "url": "https://vat-validator-mcp-production.up.railway.app"
+    }
+  }
+}
+```
+
+### LangChain (Python)
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+client = MultiServerMCPClient({
+    "vat-validator": {
+        "url": "https://vat-validator-mcp-production.up.railway.app",
+        "transport": "http"
+    }
+})
+tools = await client.get_tools()
+```
+
+### OpenAI Agents SDK (Python)
+```python
+from agents import Agent, HostedMCPTool
+agent = Agent(
+    name="Assistant",
+    tools=[HostedMCPTool(tool_config={
+        "type": "mcp",
+        "server_label": "vat-validator",
+        "server_url": "https://vat-validator-mcp-production.up.railway.app",
+        "require_approval": "never"
+    })]
+)
+```
+
+### LangGraph
+Same as LangChain above — langchain-mcp-adapters works with LangGraph natively.
+
 ## Why Use This
 
 A VAT number is the most reliable identifier for a registered business in the EU, UK, and Australia. Validating it confirms the company is real and legally registered. But validation alone isn't enough — scammers use valid VAT numbers with mismatched company names, or invoice from newly registered shells. The AI tools in this server catch what raw validation misses.
