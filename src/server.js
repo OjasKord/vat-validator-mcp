@@ -5,7 +5,7 @@ const fs = require('fs');
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
 const API_KEYS_FILE = '/tmp/vat_apikeys.json';
-const VERSION = '1.4.9';
+const VERSION = '1.4.10';
 const PRO_UPGRADE_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
 const ENTERPRISE_UPGRADE_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
@@ -48,6 +48,13 @@ function loadStats() {
 }
 
 function getMonthKey(ip) { return ip + ':' + new Date().toISOString().slice(0, 7); }
+
+function getEffectiveLimit(ip) {
+  for (const record of trialExtensions.values()) {
+    if (record.ip === ip) return FREE_TIER_LIMIT + TRIAL_EXTENSION_CALLS;
+  }
+  return FREE_TIER_LIMIT;
+}
 
 function saveApiKeys() {
   try { fs.writeFileSync(API_KEYS_FILE, JSON.stringify(Array.from(apiKeys.entries()))); } catch(e) { console.error('API keys save error:', e.message); }
@@ -256,20 +263,21 @@ async function executeTool(name, args) {
       const result = await validateHMRC(detected.number);
       if (result.error) return { valid: null, vat_number, country: 'GB', source: 'HMRC', error: result.error, likely_cause: 'external VAT registry temporarily unavailable', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), retry: true, _disclaimer: LEGAL_DISCLAIMER };
       const d = result.data;
-      if (result.status === 200 && d.target) return { valid: true, vat_number, country: 'GB', company_name: d.target.name || null, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', consultation_number: d.consultationNumber || null, checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-      return { valid: false, vat_number, country: 'GB', source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', reason: d.code || 'VAT number not found', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+      if (result.status === 200 && d.target) return { valid: true, agent_action: 'PROCEED', vat_number, country: 'GB', company_name: d.target.name || null, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', consultation_number: d.consultationNumber || null, checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+      return { valid: false, agent_action: 'VERIFY_MANUALLY', vat_number, country: 'GB', source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', reason: d.code || 'VAT number not found', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
     }
     if (detected.type === 'eu') {
       const result = await validateVIES(detected.country, detected.number);
       if (result.error) return { valid: null, vat_number, agent_action: 'RETRY_IN_30_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 1800000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), country: detected.country, source: 'VIES', source_url: 'ec.europa.eu/taxation_customs/vies', error: 'EU VIES portal is temporarily unavailable — this is a known issue with the official EU system, not a problem with the VAT number. Retry in 30 minutes.', likely_cause: 'external VAT registry temporarily unavailable', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
       const d = result.data;
-      return { valid: d.isValid || false, vat_number, country: detected.country, company_name: d.traderName || null, address: d.traderAddress || null, source: 'VIES', source_url: 'ec.europa.eu/taxation_customs/vies', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+      return { valid: d.isValid || false, agent_action: d.isValid ? 'PROCEED' : 'VERIFY_MANUALLY', vat_number, country: detected.country, company_name: d.traderName || null, address: d.traderAddress || null, source: 'VIES', source_url: 'ec.europa.eu/taxation_customs/vies', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
     }
     if (detected.type === 'au') {
       const result = await validateABN(detected.number);
       if (result.error) return { valid: null, vat_number, country: 'AU', source: 'ABR', error: result.error, likely_cause: 'external VAT registry temporarily unavailable', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
       const d = result.data;
-      return { valid: !!(d.Abn && d.AbnStatus === 'Active'), vat_number, country: 'AU', company_name: d.EntityName || null, abn_status: d.AbnStatus || null, source: 'ABR', source_url: 'abr.business.gov.au', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+      const isValidABN = !!(d.Abn && d.AbnStatus === 'Active');
+      return { valid: isValidABN, agent_action: isValidABN ? 'PROCEED' : 'VERIFY_MANUALLY', vat_number, country: 'AU', company_name: d.EntityName || null, abn_status: d.AbnStatus || null, source: 'ABR', source_url: 'abr.business.gov.au', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
     }
     return { valid: null, vat_number, agent_action: 'PROVIDE_COUNTRY_PREFIX', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), error: 'Could not detect country. Supported prefixes: EU (AT BE BG CY CZ DE DK EE EL ES FI FR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK), UK (GB), Australia (AU).', likely_cause: 'required field missing or malformed', _disclaimer: LEGAL_DISCLAIMER };
   }
@@ -281,18 +289,18 @@ async function executeTool(name, args) {
     const result = await validateHMRC(vat_number);
     if (result.error) return { valid: null, vat_number, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', error: 'UK HMRC API is temporarily unavailable — this is not a problem with the VAT number. Retry in a few minutes.', likely_cause: 'external VAT registry temporarily unavailable', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
     const d = result.data;
-    if (result.status === 200 && d.target) return { valid: true, vat_number, company_name: d.target.name || null, registered_address: d.target.address ? Object.values(d.target.address).filter(Boolean).join(', ') : null, consultation_number: d.consultationNumber || null, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-    return { valid: false, vat_number, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', reason: d.code || 'VAT number not found', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+    if (result.status === 200 && d.target) return { valid: true, agent_action: 'PROCEED', vat_number, company_name: d.target.name || null, registered_address: d.target.address ? Object.values(d.target.address).filter(Boolean).join(', ') : null, consultation_number: d.consultationNumber || null, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+    return { valid: false, agent_action: 'VERIFY_MANUALLY', vat_number, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', reason: d.code || 'VAT number not found', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
   }
 
   if (name === 'get_vat_rates') {
     const country_code = args.country_code;
     const checkedAt = nowISO();
-    if (!country_code) return { rates: VAT_RATES, note: 'VAT rates as of 2026. Verify with official tax authority before use.', source_url: 'kordagencies.com', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+    if (!country_code) return { agent_action: 'PROCEED', rates: VAT_RATES, note: 'VAT rates as of 2026. Verify with official tax authority before use.', source_url: 'kordagencies.com', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
     const code = country_code.toUpperCase();
     const rate = VAT_RATES[code];
     if (!rate) return { error: 'No VAT rate data for: ' + code + '. Supported: ' + Object.keys(VAT_RATES).join(', '), likely_cause: 'required field missing or malformed', agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
-    return Object.assign({ country_code: code }, rate, { note: 'Verify current rates with official tax authority before use.', source_url: 'kordagencies.com', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER });
+    return Object.assign({ agent_action: 'PROCEED', country_code: code }, rate, { note: 'Verify current rates with official tax authority before use.', source_url: 'kordagencies.com', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER });
   }
 
   if (name === 'batch_validate') {
@@ -303,7 +311,7 @@ async function executeTool(name, args) {
       try { return await executeTool('validate_vat', { vat_number: vat }); }
       catch(e) { return { vat_number: vat, valid: null, error: e.message, likely_cause: 'external VAT registry temporarily unavailable', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) }; }
     }));
-    return { summary: { total: results.length, valid: results.filter(r => r.valid === true).length, invalid: results.filter(r => r.valid === false).length, error: results.filter(r => r.valid === null).length }, results, _disclaimer: LEGAL_DISCLAIMER };
+    return { agent_action: 'PROCEED', summary: { total: results.length, valid: results.filter(r => r.valid === true).length, invalid: results.filter(r => r.valid === false).length, error: results.filter(r => r.valid === null).length }, results, _disclaimer: LEGAL_DISCLAIMER };
   }
 
   if (name === 'analyse_vat_risk') {
@@ -316,7 +324,8 @@ async function executeTool(name, args) {
     try {
       const response = await callClaude(prompt);
       const result = JSON.parse(response.replace(/```json|```/g, '').trim());
-      return Object.assign({}, result, { vat_number, _disclaimer: LEGAL_DISCLAIMER });
+      const vatRiskAction = (result.risk_level === 'HIGH' || result.risk_level === 'CRITICAL') ? 'HOLD' : result.risk_level === 'MEDIUM' ? 'VERIFY_MANUALLY' : 'PROCEED';
+      return Object.assign({}, result, { vat_number, agent_action: vatRiskAction, _disclaimer: LEGAL_DISCLAIMER });
     } catch(e) {
       return { recommendation: 'REVIEW', risk_level: 'MEDIUM', risk_score: 50, vat_number, error: 'AI analysis unavailable - manual review recommended', likely_cause: 'AI analysis failed — transient Anthropic API issue', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
     }
@@ -329,7 +338,7 @@ async function executeTool(name, args) {
     try {
       const response = await callClaude(prompt);
       const result = JSON.parse(response.replace(/```json|```/g, '').trim());
-      const agentAction = result.recommendation === 'REJECT' ? 'BLOCK_PAYMENT' : result.recommendation === 'REVIEW' ? 'MANUAL_REVIEW_REQUIRED' : 'PROCEED_WITH_PAYMENT';
+      const agentAction = result.match_verdict === 'MATCH' ? 'PROCEED' : 'INVESTIGATE';
       return Object.assign({}, result, { invoice_vat_number, agent_action: agentAction, discrepancies: result.discrepancies || [], _disclaimer: LEGAL_DISCLAIMER });
     } catch(e) {
       return { match_verdict: 'UNVERIFIABLE', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), fraud_risk: 'MEDIUM', invoice_vat_number, discrepancies: [], error: 'AI analysis unavailable -- manual review recommended', likely_cause: 'AI analysis failed — transient Anthropic API issue', _disclaimer: LEGAL_DISCLAIMER };
@@ -610,12 +619,13 @@ const server = http.createServer(async (req, res) => {
             const used = freeTierUsage.get(getMonthKey(ip)) || 0;
             const remaining = FREE_TIER_LIMIT - used;
             const isWarning = used >= FREE_TIER_WARNING;
+            const effectiveLimit = getEffectiveLimit(ip);
 
             if (name === 'validate_vat' || name === 'validate_uk_vat') {
               // Gate address on free tier — company name + valid status visible
               const gated = ['registered_address', 'address', 'consultation_number'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full registered address and HMRC consultation number.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full registered address and HMRC consultation number.';
               result._gated_fields = gated;
             }
 
@@ -623,7 +633,7 @@ const server = http.createServer(async (req, res) => {
               // Gate full reasoning — verdict visible, details gated
               const gated = ['fraud_signals', 'positive_indicators', 'recommended_action', 'summary'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full fraud signal breakdown, positive indicators, and recommended action.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full fraud signal breakdown, positive indicators, and recommended action.';
               result._gated_fields = gated;
             }
 
@@ -631,7 +641,7 @@ const server = http.createServer(async (req, res) => {
               // Gate detail fields — match_status visible, discrepancies gated
               const gated = ['discrepancies', 'name_match', 'address_match', 'recommended_action', 'summary'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + FREE_TIER_LIMIT + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full discrepancy analysis and recommended action.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full discrepancy analysis and recommended action.';
               result._gated_fields = gated;
             }
 

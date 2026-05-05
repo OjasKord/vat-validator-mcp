@@ -5,6 +5,12 @@ Format: version number, date, what changed.
 
 ---
 
+## v1.4.10 — 2026-05-05
+
+### Fixed
+- `_upgrade_note` denominator now reflects effective limit (30) after a trial extension is granted, not the base limit (20)
+- `agent_action` added to all successful tool responses: `validate_vat` (PROCEED/VERIFY_MANUALLY), `validate_uk_vat` (PROCEED/VERIFY_MANUALLY), `get_vat_rates` (PROCEED), `batch_validate` (PROCEED), `analyse_vat_risk` (PROCEED/VERIFY_MANUALLY/HOLD derived from risk_level), `compare_invoice_details` (PROCEED/INVESTIGATE derived from match_verdict)
+
 ## v1.4.9 — 2026-05-05
 
 ### Fixed
