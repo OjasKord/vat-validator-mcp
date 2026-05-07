@@ -3,7 +3,7 @@
   "name": "io.github.OjasKord/vat-validator-mcp",
   "title": "VAT Validator MCP",
   "description": "Validate EU, UK, AU VAT numbers for AI agents. EU ViDA e-invoicing compliance.",
-  "version": "1.4.8",
+  "version": "1.4.11",
   "websiteUrl": "https://kordagencies.com",
   "repository": {
     "url": "https://github.com/OjasKord/vat-validator-mcp",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "vat-validator-mcp",
-      "version": "1.4.8",
+      "version": "1.4.11",
       "transport": { "type": "stdio" },
       "environmentVariables": [
         { "name": "ANTHROPIC_API_KEY", "description": "Anthropic API key for AI-powered fraud risk analysis", "isRequired": true, "isSecret": true },
