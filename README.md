@@ -129,6 +129,40 @@ AI comparison of invoice details against official registry records. Flags discre
 }
 ```
 
+## Add to Your Agent
+
+### Claude Code / Claude Desktop (.mcp.json)
+```json
+{
+  "mcpServers": {
+    "vat-validator": {
+      "type": "sse",
+      "url": "https://vat-validator-mcp-production.up.railway.app/sse"
+    }
+  }
+}
+```
+
+### LangChain / LangGraph (Python)
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+client = MultiServerMCPClient({
+    "vat-validator": {
+        "url": "https://vat-validator-mcp-production.up.railway.app/sse",
+        "transport": "sse"
+    }
+})
+tools = await client.get_tools()
+```
+
+### OpenAI Agents SDK (Python)
+```python
+from agents.mcp import MCPServerSse
+mcp_server = MCPServerSse(
+    params={"url": "https://vat-validator-mcp-production.up.railway.app/sse"}
+)
+```
+
 ## Example Responses
 
 **validate_vat:**

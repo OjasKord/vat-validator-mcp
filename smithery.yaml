@@ -1,4 +1,4 @@
-description: "VAT number validator for AI agents. EU VIES, UK HMRC, ABR. Invoice fraud detection included."
+description: "VAT number validation via EU VIES (27 member states), UK HMRC, and AU ABR. Call before invoice approval, supplier onboarding, or cross-border payment. Returns valid/invalid, company name, and CLEAR/REVIEW/BLOCK fraud assessment."
 startCommand:
   type: http
   url: https://vat-validator-mcp-production.up.railway.app

@@ -5,7 +5,7 @@ const fs = require('fs');
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
 const API_KEYS_FILE = '/tmp/vat_apikeys.json';
-const VERSION = '1.4.10';
+const VERSION = '1.4.11';
 const PRO_UPGRADE_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
 const ENTERPRISE_UPGRADE_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
