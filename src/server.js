@@ -573,7 +573,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/health' && (req.method === 'GET' || req.method === 'HEAD')) {
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', version: VERSION, service: 'vat-validator-mcp', free_tier: 'no API key required for first 20 calls/month', paid_keys_issued: apiKeys.size }));
+    res.end(JSON.stringify({ status: 'ok', version: VERSION, service: 'vat-validator-mcp', free_tier: 'no API key required for first ' + FREE_TIER_LIMIT + ' calls/month', paid_keys_issued: apiKeys.size }));
     return;
   }
 
