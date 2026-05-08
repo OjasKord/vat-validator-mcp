@@ -1,7 +1,7 @@
 {
   "name": "vat-validator-mcp",
   "mcpName": "io.github.OjasKord/vat-validator-mcp",
-  "version": "1.4.12",
+  "version": "1.4.13",
   "description": "VAT number validation for AI agents. EU VIES, UK HMRC, Australian ABN in one call.",
   "main": "src/server.js",
   "scripts": {
@@ -40,5 +40,8 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "stripe": "^22.1.1"
   }
 }

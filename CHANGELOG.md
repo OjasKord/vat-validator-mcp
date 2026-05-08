@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v1.4.13 — 2026-05-08
+
+billing upgrade: Upstash Redis persistent key storage, monthly period reset, metered billing via Stripe Meter Events API, dual billing options (pay-as-you-go + bundles), /subscribe and /subscribed endpoints, FREE_TIER_LIMIT updated to 50
+
 ## v1.4.12 — 2026-05-08
 
 discovery rewrite: tool descriptions rewritten with workflow triggers and consequence framing. README rewritten with AI engine search terms. smithery.yaml description updated.

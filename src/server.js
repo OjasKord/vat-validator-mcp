@@ -2,26 +2,28 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
+const Stripe = require('stripe');
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const API_KEYS_FILE = '/tmp/vat_apikeys.json';
-const VERSION = '1.4.12';
-const PRO_UPGRADE_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
-const ENTERPRISE_UPGRADE_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
+const VERSION = '1.4.13';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PORT = process.env.PORT || 3000;
 const STATS_KEY = process.env.STATS_KEY || 'ojas2026';
+const REDIS_PREFIX = 'vat';
+const FREE_TIER_LIMIT = 50;
+const METERED_SUBSCRIBE_URL = 'https://vat-validator-mcp-production.up.railway.app/subscribe';
+const BUNDLE_500_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
+const BUNDLE_2000_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
 
 const freeTierUsage = new Map();
 const usageLog = [];
 const toolUsageCounts = {};
 const trialExtensions = new Map();
-const FREE_TIER_LIMIT = 20;
-const FREE_TIER_WARNING = 16;
+const FREE_TIER_WARNING = 40;
 const TRIAL_EXTENSION_CALLS = 10;
 const apiKeys = new Map();
-const PLAN_LIMITS = { pro: 5000, enterprise: Infinity };
 
 function saveStats() {
   try {
@@ -56,26 +58,97 @@ function getEffectiveLimit(ip) {
   return FREE_TIER_LIMIT;
 }
 
-function saveApiKeys() {
-  try { fs.writeFileSync(API_KEYS_FILE, JSON.stringify(Array.from(apiKeys.entries()))); } catch(e) { console.error('API keys save error:', e.message); }
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+
+async function redisGet(key) {
+  try {
+    const res = await fetch(
+      `${UPSTASH_URL}/get/${encodeURIComponent(key)}`,
+      { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
+    );
+    const data = await res.json();
+    if (!data.result) return null;
+    return JSON.parse(data.result);
+  } catch(e) { return null; }
 }
 
-function loadApiKeys() {
+async function redisSet(key, value) {
   try {
-    if (fs.existsSync(API_KEYS_FILE)) {
-      const entries = JSON.parse(fs.readFileSync(API_KEYS_FILE, 'utf8'));
-      entries.forEach(([k, v]) => apiKeys.set(k, v));
-      console.log('API keys loaded: ' + apiKeys.size + ' keys');
+    await fetch(
+      `${UPSTASH_URL}/set/${encodeURIComponent(key)}`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${UPSTASH_TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ value: JSON.stringify(value) })
+      }
+    );
+  } catch(e) {}
+}
+
+async function redisKeys(pattern) {
+  try {
+    const res = await fetch(
+      `${UPSTASH_URL}/keys/${encodeURIComponent(pattern)}`,
+      { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
+    );
+    const data = await res.json();
+    return data.result || [];
+  } catch(e) { return []; }
+}
+
+async function saveKeyToRedis(apiKey, record, prefix) {
+  await redisSet(`${prefix}:key:${apiKey}`, record);
+}
+
+async function loadApiKeysFromRedis(prefix) {
+  const keys = await redisKeys(`${prefix}:key:*`);
+  for (const redisKey of keys) {
+    const record = await redisGet(redisKey);
+    if (record) {
+      const apiKey = redisKey.replace(`${prefix}:key:`, '');
+      apiKeys.set(apiKey, record);
     }
-  } catch(e) { console.error('API keys load error:', e.message); }
+  }
+  console.log(`Loaded ${apiKeys.size} API keys from Redis`);
 }
 
 function generateApiKey() { return 'vat_' + crypto.randomBytes(24).toString('hex'); }
-function getPlanFromProduct(name) {
-  if (!name) return 'pro';
-  return name.toLowerCase().includes('enterprise') ? 'enterprise' : 'pro';
+function getPlanFromProduct(productName) {
+  if (!productName) return 'bundle_500';
+  const n = productName.toLowerCase();
+  if (n.includes('metered') || n.includes('pay as you go') || n === 'metered') return 'metered';
+  if (n.includes('2000') || n.includes('2,000') || n.includes('enterprise')) return 'bundle_2000';
+  return 'bundle_500';
 }
 function nowISO() { return new Date().toISOString(); }
+
+function checkAndResetPeriod(record) {
+  const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+  if (Date.now() - record.periodStart > thirtyDays) {
+    record.calls = 0;
+    record.periodStart = Date.now();
+    return true;
+  }
+  return false;
+}
+
+async function reportMeteredUsage(customerId, eventName) {
+  try {
+    await stripe.billing.meterEvents.create({
+      event_name: eventName,
+      payload: {
+        stripe_customer_id: customerId,
+        value: '1'
+      }
+    });
+  } catch(e) {
+    console.error('Stripe metered usage report failed:', e.message);
+  }
+}
 
 async function sendEmail(to, subject, html) {
   return new Promise((resolve) => {
@@ -90,10 +163,10 @@ async function sendEmail(to, subject, html) {
 }
 
 async function sendApiKeyEmail(email, apiKey, plan) {
-  const planLabel = plan === 'enterprise' ? 'Enterprise' : 'Pro';
-  const limit = plan === 'enterprise' ? 'Unlimited' : '5,000';
-  const html = '<!DOCTYPE html><html><body style="font-family:monospace;background:#080A0F;color:#E8EDF5;padding:40px;max-width:600px;margin:0 auto"><div style="border:1px solid rgba(0,229,195,0.3);border-radius:8px;padding:32px"><div style="color:#00E5C3;font-size:13px;letter-spacing:0.2em;text-transform:uppercase;margin-bottom:24px">VAT Validator MCP - ' + planLabel + ' Plan</div><h1 style="font-size:24px;font-weight:700;margin-bottom:8px;color:#FFFFFF">Your API key is ready.</h1><div style="background:#141B24;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:20px;margin-bottom:24px"><div style="color:#5A6478;font-size:11px;text-transform:uppercase;margin-bottom:8px">Your API Key</div><div style="color:#00E5C3;font-size:14px;word-break:break-all">' + apiKey + '</div></div><div style="background:#141B24;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:20px;margin-bottom:24px"><div style="color:#5A6478;font-size:11px;text-transform:uppercase;margin-bottom:8px">MCP Config</div><div style="color:#86EFAC;font-size:12px">{"vat-validator":{"url":"https://vat-validator-mcp-production.up.railway.app","headers":{"x-api-key":"' + apiKey + '"}}}</div></div><div style="background:#141B24;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:20px;margin-bottom:24px"><div style="color:#E8EDF5;font-size:13px">Plan: ' + planLabel + ' | Validations: ' + limit + '/month</div></div><div style="background:#0D1219;border-radius:6px;padding:16px;margin-bottom:24px;font-size:11px;color:#5A6478;line-height:1.7">Results are informational only. Verify with a qualified tax advisor. Liability capped at 3 months fees. Full terms: kordagencies.com/terms.html</div><p style="color:#5A6478;font-size:12px">Questions? ojas@kordagencies.com</p></div></body></html>';
-  return sendEmail(email, 'Your VAT Validator MCP ' + planLabel + ' API Key', html);
+  const planLabel = plan === 'metered' ? 'Pay-as-you-go' : plan === 'bundle_2000' ? 'Bundle 2000' : 'Bundle 500';
+  const limitNote = plan === 'metered' ? 'Pay only for what you use — billed monthly' : plan === 'bundle_2000' ? '2,000 calls included' : '500 calls included';
+  const html = '<!DOCTYPE html><html><body style="font-family:monospace;background:#080A0F;color:#E8EDF5;padding:40px;max-width:600px;margin:0 auto"><div style="border:1px solid rgba(0,229,195,0.3);border-radius:8px;padding:32px"><div style="color:#00E5C3;font-size:13px;letter-spacing:0.2em;text-transform:uppercase;margin-bottom:24px">VAT Validator MCP - ' + planLabel + '</div><h1 style="font-size:24px;font-weight:700;margin-bottom:8px;color:#FFFFFF">Your API key is ready.</h1><div style="background:#141B24;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:20px;margin-bottom:24px"><div style="color:#5A6478;font-size:11px;text-transform:uppercase;margin-bottom:8px">Your API Key</div><div style="color:#00E5C3;font-size:14px;word-break:break-all">' + apiKey + '</div></div><div style="background:#141B24;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:20px;margin-bottom:24px"><div style="color:#5A6478;font-size:11px;text-transform:uppercase;margin-bottom:8px">MCP Config</div><div style="color:#86EFAC;font-size:12px">{"vat-validator":{"url":"https://vat-validator-mcp-production.up.railway.app","headers":{"x-api-key":"' + apiKey + '"}}}</div></div><div style="background:#141B24;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:20px;margin-bottom:24px"><div style="color:#E8EDF5;font-size:13px">Plan: ' + planLabel + '<br>' + limitNote + '</div></div><div style="background:#0D1219;border-radius:6px;padding:16px;margin-bottom:24px;font-size:11px;color:#5A6478;line-height:1.7">Results are informational only. Verify with a qualified tax advisor. Liability capped at 3 months fees. Full terms: kordagencies.com/terms.html</div><p style="color:#5A6478;font-size:12px">Questions? ojas@kordagencies.com</p></div></body></html>';
+  return sendEmail(email, 'Your VAT Validator MCP API Key — ' + planLabel, html);
 }
 
 async function callClaude(prompt) {
@@ -352,19 +425,69 @@ function checkAccess(req) {
   const apiKey = req.headers['x-api-key'];
   if (apiKey) {
     const record = apiKeys.get(apiKey);
-    if (!record) return { allowed: false, reason: 'Invalid API key. Get yours at kordagencies.com', tier: 'invalid' };
-    if (record.limit !== Infinity && record.calls >= record.limit) return { allowed: false, reason: 'Monthly limit of ' + record.limit + ' validations reached. Upgrade at kordagencies.com', tier: 'limit_reached' };
+    if (!record) {
+      return { allowed: false, error: 'Invalid API key' };
+    }
+
+    const wasReset = checkAndResetPeriod(record);
+    if (wasReset) {
+      saveKeyToRedis(apiKey, record, REDIS_PREFIX).catch(() => {});
+    }
+
+    if (record.plan === 'metered') {
+      record.calls++;
+      saveKeyToRedis(apiKey, record, REDIS_PREFIX).catch(() => {});
+      return {
+        allowed: true,
+        paid: true,
+        plan: 'metered',
+        stripeCustomerId: record.stripeCustomerId
+      };
+    }
+
+    if (record.calls >= record.limit) {
+      return {
+        allowed: false,
+        error: `Bundle exhausted. You have used all ${record.limit} calls in this bundle. Purchase another bundle or switch to pay-as-you-go.`,
+        subscribe_url: METERED_SUBSCRIBE_URL,
+        bundle_500_url: BUNDLE_500_URL,
+        bundle_2000_url: BUNDLE_2000_URL,
+        agent_action: 'PAUSE_AND_NOTIFY_USER'
+      };
+    }
+
     record.calls++;
-    return { allowed: true, tier: record.plan, record };
+    saveKeyToRedis(apiKey, record, REDIS_PREFIX).catch(() => {});
+    return { allowed: true, paid: true, plan: record.plan };
   }
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   const monthKey = getMonthKey(ip);
   const calls = freeTierUsage.get(monthKey) || 0;
-  if (calls >= FREE_TIER_LIMIT) return { allowed: false, reason: 'Free tier limit of ' + FREE_TIER_LIMIT + ' calls/month reached. Option 1: POST /trial-extension with {"name":"...","email":"...","use_case":"..."} for 10 extra free calls. Option 2: Upgrade to Pro at ' + PRO_UPGRADE_URL + ' (500 calls, never expire).', upgrade_url: PRO_UPGRADE_URL, trial_extension: { endpoint: '/trial-extension', method: 'POST', body: { name: 'string', email: 'string', use_case: 'string' } }, tier: 'free_limit_reached' };
+  if (calls >= FREE_TIER_LIMIT) return {
+    allowed: false,
+    error: 'Free tier limit of 50 calls/month reached.',
+    options: {
+      pay_as_you_go: {
+        description: 'No commitment. Pay only for what you use. Billed monthly at end of period.',
+        pricing: {
+          vat_query: '$0.010 per query'
+        },
+        subscribe_url: METERED_SUBSCRIBE_URL
+      },
+      bundle: {
+        description: 'Buy a fixed call bundle. No subscription.',
+        options: [
+          { calls: 500, price: '$8', url: BUNDLE_500_URL },
+          { calls: 2000, price: '$28', url: BUNDLE_2000_URL }
+        ]
+      }
+    },
+    agent_action: 'PAUSE_AND_NOTIFY_USER'
+  };
   freeTierUsage.set(monthKey, calls + 1);
   saveStats();
   const remaining = FREE_TIER_LIMIT - calls - 1;
-  const warningMsg = remaining < 5 ? remaining + ' free validations remaining this month. Need more? POST /trial-extension with your email for 10 extra free calls, or upgrade at ' + PRO_UPGRADE_URL + ' (500 calls, never expire).' : null;
+  const warningMsg = remaining < 10 ? remaining + ' free validations remaining this month. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire.' : null;
   return { allowed: true, tier: 'free', remaining, warning: warningMsg };
 }
 
@@ -400,16 +523,35 @@ async function handleStripeWebhook(body, sig) {
     const event = JSON.parse(body);
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-      const email = session.customer_email || session.customer_details?.email;
-      const plan = getPlanFromProduct(session.metadata?.product_name || '');
-      if (email) {
-        const apiKey = generateApiKey();
-        apiKeys.set(apiKey, { email, plan, createdAt: new Date().toISOString(), calls: 0, limit: PLAN_LIMITS[plan] });
-        saveApiKeys();
-        await sendApiKeyEmail(email, apiKey, plan);
-        console.log('[vat] API key created for ' + email + ' (' + plan + ')');
-        return { success: true, email, plan };
+      const plan = getPlanFromProduct(session.metadata?.product_name);
+      const apiKey = generateApiKey();
+      const limit = plan === 'metered' ? null : plan === 'bundle_2000' ? 2000 : 500;
+      const record = {
+        email: session.customer_details?.email || 'unknown',
+        plan,
+        calls: 0,
+        periodStart: Date.now(),
+        limit,
+        stripeCustomerId: session.customer || null,
+        createdAt: Date.now()
+      };
+      apiKeys.set(apiKey, record);
+      await saveKeyToRedis(apiKey, record, REDIS_PREFIX);
+      await sendApiKeyEmail(record.email, apiKey, plan);
+      console.log('[vat] API key created for ' + record.email + ' (' + plan + ')');
+      return { success: true, email: record.email, plan };
+    }
+    if (event.type === 'customer.subscription.created') {
+      const sub = event.data.object;
+      const customerId = sub.customer;
+      for (const [key, record] of apiKeys.entries()) {
+        if (record.stripeCustomerId === customerId && !record.subscriptionId) {
+          record.subscriptionId = sub.id;
+          await saveKeyToRedis(key, record, REDIS_PREFIX);
+          break;
+        }
       }
+      return { received: true, type: event.type };
     }
     return { received: true, type: event.type };
   } catch(e) { console.error('[vat] Webhook error:', e.message); return { error: e.message, status: 400 }; }
@@ -480,7 +622,7 @@ const server = http.createServer(async (req, res) => {
         const { name, email, use_case } = JSON.parse(body);
         if (!name || !email) { res.writeHead(400, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'name and email are required', agent_action: 'PROVIDE_REQUIRED_FIELDS' })); return; }
         const emailKey = 'trial:' + email.toLowerCase().trim();
-        if (trialExtensions.has(emailKey)) { res.writeHead(409, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Trial extension already granted for this email.', upgrade_url: PRO_UPGRADE_URL, agent_action: 'INFORM_USER_TRIAL_ALREADY_USED' })); return; }
+        if (trialExtensions.has(emailKey)) { res.writeHead(409, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Trial extension already granted for this email.', bundle_url: BUNDLE_500_URL, agent_action: 'INFORM_USER_TRIAL_ALREADY_USED' })); return; }
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
         const monthKey = getMonthKey(ip);
         const currentCalls = freeTierUsage.get(monthKey) || 0;
@@ -490,9 +632,9 @@ const server = http.createServer(async (req, res) => {
         await sendEmail('ojas@kordagencies.com', 'VAT Validator -- Trial Extension: ' + name,
           '<p><b>Name:</b> ' + name + '<br><b>Email:</b> ' + email + '<br><b>Use case:</b> ' + (use_case || 'Not provided') + '<br><b>IP:</b> ' + ip + '<br><b>Calls granted:</b> ' + TRIAL_EXTENSION_CALLS + '</p>');
         await sendEmail(email, TRIAL_EXTENSION_CALLS + ' extra free calls added -- VAT Validator MCP',
-          '<p>Hi ' + name + ',</p><p>Your ' + TRIAL_EXTENSION_CALLS + ' extra free calls have been added. You can keep using VAT Validator MCP right now -- no action needed.</p><p>When you need more, Pro is $8/month for 500 calls (never expire): ' + PRO_UPGRADE_URL + '</p><p>Ojas<br>kordagencies.com</p>');
+          '<p>Hi ' + name + ',</p><p>Your ' + TRIAL_EXTENSION_CALLS + ' extra free calls have been added. You can keep using VAT Validator MCP right now -- no action needed.</p><p>When you need more, get 500 calls for $8: ' + BUNDLE_500_URL + '</p><p>Ojas<br>kordagencies.com</p>');
         res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ granted: true, additional_calls: TRIAL_EXTENSION_CALLS, message: TRIAL_EXTENSION_CALLS + ' extra free calls added. Check your email for confirmation.', upgrade_url: PRO_UPGRADE_URL }));
+        res.end(JSON.stringify({ granted: true, additional_calls: TRIAL_EXTENSION_CALLS, message: TRIAL_EXTENSION_CALLS + ' extra free calls added. Check your email for confirmation.', bundle_url: BUNDLE_500_URL }));
       } catch(e) { res.writeHead(400, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message, agent_action: 'RETRY_IN_2_MIN' })); }
     });
     return;
@@ -556,15 +698,18 @@ const server = http.createServer(async (req, res) => {
         } else if (request.method === 'tools/call') {
           const access = checkAccess(req);
           if (!access.allowed) {
-            response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.reason, upgrade_url: PRO_UPGRADE_URL, agent_action: 'Inform user free tier quota is exhausted. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.' } };
+            response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } };
           } else {
             const { name, arguments: args } = request.params;
             const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-            usageLog.push({ tool: name, tier: access.tier, time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
+            usageLog.push({ tool: name, tier: access.tier || access.plan || 'paid', time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
             if (usageLog.length > 1000) usageLog.shift();
             toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
             saveStats();
             const result = await executeTool(name, args || {});
+            if (access.plan === 'metered' && access.stripeCustomerId) {
+              reportMeteredUsage(access.stripeCustomerId, 'vat_query').catch(() => {});
+            }
             response = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
           }
         } else {
@@ -587,16 +732,15 @@ const server = http.createServer(async (req, res) => {
         const request = JSON.parse(body);
         let response;
         if (request.method === 'tools/call') {
-          if (request.params?.name === 'batch_validate') {
-            const apiKey = req.headers['x-api-key'];
-            if (!apiKey) { res.writeHead(402, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32002, message: 'batch_validate requires a paid API key. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.', upgrade_url: PRO_UPGRADE_URL, agent_action: 'Paid API key required for batch_validate. Get 500 calls for $8 at ' + PRO_UPGRADE_URL } })); return; }
-            const record = apiKeys.get(apiKey);
-            if (!record) { res.writeHead(401, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32001, message: 'Invalid API key. Get yours at kordagencies.com', agent_action: 'Invalid API key. Obtain a valid key at kordagencies.com' } })); return; }
-          } else {
-            const access = checkAccess(req);
-            if (!access.allowed) { res.writeHead(429, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.reason, upgrade_url: PRO_UPGRADE_URL, agent_action: 'Inform user free tier quota is exhausted. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.' } })); return; }
-            req._accessWarning = access.warning; req._tier = access.tier;
+          const access = checkAccess(req);
+          if (!access.allowed) {
+            res.writeHead(429, { ...cors, 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } }));
+            return;
           }
+          req._accessWarning = access.warning;
+          req._tier = access.tier;
+          req._accessResult = access;
         }
         if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every accounts-payable pipeline reaches a moment where an agent must validate a VAT registration or approve an invoice without being able to reason its way to a reliable answer. VAT Validator MCP answers that question in real time -- live checks against EU VIES, UK HMRC, and Australian ABR, with AI-powered invoice comparison. An agent acting on stale VAT data has no defence against a tax authority. Used before any invoice payment, supplier onboarding, or cross-border transaction.' } } };
         } else if (request.method === 'notifications/initialized') { res.writeHead(204, cors); res.end(); return;
@@ -606,46 +750,46 @@ const server = http.createServer(async (req, res) => {
         } else if (request.method === 'tools/call') {
           const { name, arguments: toolArgs } = request.params;
           const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
-          usageLog.push({ tool: name, tier: req._tier || 'paid', time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
+          usageLog.push({ tool: name, tier: req._tier || req._accessResult?.plan || 'paid', time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
           if (usageLog.length > 1000) usageLog.shift();
           toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
           saveStats();
           const result = await executeTool(name, toolArgs || {});
           if (req._accessWarning) result._notice = req._accessWarning;
 
+          if (req._accessResult && req._accessResult.plan === 'metered' && req._accessResult.stripeCustomerId) {
+            reportMeteredUsage(req._accessResult.stripeCustomerId, 'vat_query').catch(() => {});
+          }
+
           // Partial response for free tier
           if (req._tier === 'free' && !result.error) {
-            const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
             const used = freeTierUsage.get(getMonthKey(ip)) || 0;
             const remaining = FREE_TIER_LIMIT - used;
             const isWarning = used >= FREE_TIER_WARNING;
             const effectiveLimit = getEffectiveLimit(ip);
 
             if (name === 'validate_vat' || name === 'validate_uk_vat') {
-              // Gate address on free tier — company name + valid status visible
               const gated = ['registered_address', 'address', 'consultation_number'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full registered address and HMRC consultation number.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire. Includes full registered address and HMRC consultation number.';
               result._gated_fields = gated;
             }
 
             if (name === 'analyse_vat_risk') {
-              // Gate full reasoning — verdict visible, details gated
               const gated = ['fraud_signals', 'positive_indicators', 'recommended_action', 'summary'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full fraud signal breakdown, positive indicators, and recommended action.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire. Includes full fraud signal breakdown, positive indicators, and recommended action.';
               result._gated_fields = gated;
             }
 
             if (name === 'compare_invoice_details') {
-              // Gate detail fields — match_status visible, discrepancies gated
               const gated = ['discrepancies', 'name_match', 'address_match', 'recommended_action', 'summary'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire. Includes full discrepancy analysis and recommended action.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire. Includes full discrepancy analysis and recommended action.';
               result._gated_fields = gated;
             }
 
-            if (isWarning) result._notice = 'Warning: only ' + remaining + ' free call' + (remaining === 1 ? '' : 's') + ' left this month. Get 500 calls for $8 at ' + PRO_UPGRADE_URL + ' -- calls never expire.';
+            if (isWarning) result._notice = 'Warning: only ' + remaining + ' free call' + (remaining === 1 ? '' : 's') + ' left this month. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire.';
           }
 
           response = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
@@ -657,7 +801,57 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: VERSION, status: 'ok', tools: 6, free_tier: '20 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', upgrade: PRO_UPGRADE_URL })); return; }
+  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: VERSION, status: 'ok', tools: 6, free_tier: '50 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', subscribe_url: METERED_SUBSCRIBE_URL, bundle_500_url: BUNDLE_500_URL, bundle_2000_url: BUNDLE_2000_URL })); return; }
+
+  if (req.url === '/subscribe' && req.method === 'GET') {
+    try {
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        line_items: [
+          { price: 'price_1TUkxWD6WvRe6sn3eFTaokqx' }
+        ],
+        success_url: 'https://vat-validator-mcp-production.up.railway.app/subscribed',
+        cancel_url: 'https://kordagencies.com/vat-validator.html',
+        metadata: { product_name: 'metered' }
+      });
+      res.writeHead(302, { Location: session.url });
+      res.end();
+    } catch(e) {
+      res.writeHead(500, { ...cors, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Could not create checkout session', details: e.message }));
+    }
+    return;
+  }
+
+  if (req.url === '/subscribed' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Subscription confirmed</title>
+<style>
+body{background:#070910;color:#00E5C3;
+font-family:'DM Mono',monospace;padding:3rem;
+max-width:600px;margin:0 auto}
+h2{font-weight:400;margin-bottom:1rem}
+p{color:#8895AA;font-size:13px;line-height:1.6;
+margin-bottom:0.8rem}
+a{color:#00E5C3}
+</style>
+</head>
+<body>
+<h2>Subscription confirmed.</h2>
+<p>Your API key will arrive by email within 60 seconds.</p>
+<p>Add it to your agent config as the
+<span style="color:#fff">x-api-key</span> header.</p>
+<p>Full documentation at
+<a href="https://kordagencies.com">kordagencies.com</a></p>
+</body>
+</html>`);
+    return;
+  }
+
   res.writeHead(404, cors); res.end(JSON.stringify({ error: 'Not found' }));
 });
 
@@ -702,12 +896,14 @@ function setupStdio() {
 
 setupStdio();
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   loadStats();
-  loadApiKeys();
+  await loadApiKeysFromRedis('vat');
   console.log('VAT Validator MCP v' + VERSION + ' running on port ' + PORT);
   console.log('Free tier: ' + FREE_TIER_LIMIT + ' calls/IP/month, no API key required');
   console.log('Resend: ' + (RESEND_API_KEY ? 'configured' : 'MISSING'));
   console.log('Anthropic: ' + (ANTHROPIC_API_KEY ? 'configured' : 'MISSING'));
   console.log('ABR GUID: ' + (process.env.ABR_GUID ? 'custom GUID set' : 'using fallback demo GUID — set ABR_GUID env var'));
+  console.log('Upstash Redis: ' + (UPSTASH_URL ? 'configured' : 'MISSING - set UPSTASH_REDIS_REST_URL'));
+  console.log('Stripe: ' + (process.env.STRIPE_SECRET_KEY ? 'configured' : 'MISSING - set STRIPE_SECRET_KEY'));
 });
