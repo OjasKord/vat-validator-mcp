@@ -1,19 +1,45 @@
 {
-  "name": "vat-validator-mcp",
-  "title": "VAT Validator MCP",
-  "description": "Validate EU, UK, and Australian VAT numbers for AI agents. EU VIES, UK HMRC, Australian ABN. Required for EU ViDA e-invoicing compliance.",
-  "version": "1.0.0",
-  "homepage": "https://kordagencies.com",
-  "license": "UNLICENSED",
-  "tools": [
-    { "name": "validate_vat", "description": "Validate any EU, UK, or Australian VAT number" },
-    { "name": "validate_uk_vat", "description": "Validate UK VAT number against HMRC with consultation number" },
-    { "name": "get_vat_rates", "description": "Get VAT rates by country for EU, UK, Australia" },
-    { "name": "batch_validate", "description": "Validate up to 10 VAT numbers in one call (paid)" }
+  "$schema": "https://glama.ai/mcp/servers/schema.json",
+  "name": "VAT Validator MCP",
+  "description": "AI-powered VAT fraud detection and live VAT validation via EU VIES (27 member states), UK HMRC, and AU ABR. Call before invoice approval, supplier onboarding, or cross-border payment. Detects missing trader fraud, carousel fraud, deregistered entity re-use. Returns CLEAR/REVIEW/BLOCK verdict.",
+  "license": "MIT",
+  "categories": [
+    "finance",
+    "government-data",
+    "legal-and-compliance"
   ],
-  "pricing": {
-    "free": "20 validations/month, no API key",
-    "pro": "$99/month — 5,000 validations/month",
-    "enterprise": "$299/month — unlimited + batch"
+  "remote": {
+    "transport": "sse",
+    "url": "https://vat-validator-mcp-production.up.railway.app/sse"
+  },
+  "tools": [
+    {
+      "name": "validate_vat",
+      "description": "Validates EU VAT numbers against EU VIES (all 27 member states) and AU ABR in real time. Returns valid/invalid, registered company name, address."
+    },
+    {
+      "name": "validate_uk_vat",
+      "description": "Validates UK VAT numbers against HMRC VAT API v2 via OAuth2. Returns valid/invalid, registered business name, address."
+    },
+    {
+      "name": "get_vat_rates",
+      "description": "Returns current standard, reduced, and zero VAT rates for all 27 EU member states and UK."
+    },
+    {
+      "name": "batch_validate",
+      "description": "Validates multiple VAT numbers against EU VIES and HMRC in one call. Returns per-number verdicts in structured JSON."
+    },
+    {
+      "name": "analyse_vat_risk",
+      "description": "AI-powered VAT fraud risk scoring. Detects missing trader fraud, carousel fraud, deregistered entity re-use. Returns CLEAR/REVIEW/BLOCK recommendation, risk score 0-100, fraud signals, agent_action (PROCEED/VERIFY_MANUALLY/HOLD)."
+    },
+    {
+      "name": "compare_invoice_details",
+      "description": "Cross-checks invoice VAT details against live VIES and HMRC registry data. Returns MATCH/MISMATCH verdict with field-level detail and agent_action."
+    }
+  ],
+  "links": {
+    "homepage": "https://kordagencies.com",
+    "npm": "https://www.npmjs.com/package/vat-validator-mcp"
   }
 }
