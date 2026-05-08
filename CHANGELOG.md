@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v1.4.12 — 2026-05-08
+
+discovery rewrite: tool descriptions rewritten with workflow triggers and consequence framing. README rewritten with AI engine search terms. smithery.yaml description updated.
+
 ## v1.4.11 — 2026-05-07
 
 ### Docs

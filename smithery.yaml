@@ -1,4 +1,4 @@
-description: "VAT number validation via EU VIES (27 member states), UK HMRC, and AU ABR. Call before invoice approval, supplier onboarding, or cross-border payment. Returns valid/invalid, company name, and CLEAR/REVIEW/BLOCK fraud assessment."
+description: "AI-powered VAT fraud detection and live VAT validation via EU VIES (27 member states), UK HMRC, and AU ABR. Call before invoice approval, supplier onboarding, or cross-border payment. Detects missing trader fraud, carousel fraud, deregistered entity re-use. Returns CLEAR/REVIEW/BLOCK verdict."
 startCommand:
   type: http
   url: https://vat-validator-mcp-production.up.railway.app
