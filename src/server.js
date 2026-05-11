@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.2';
+const VERSION = '2.0.3';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -211,6 +211,15 @@ async function validateVIES(countryCode, vatNumber) {
   });
 }
 
+async function hmrcFetchWithRetry(url, options, maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const response = await fetch(url, options);
+    if (response.status !== 429) return response;
+    if (attempt === maxRetries) return response;
+    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+  }
+}
+
 function getFraudPreventionHeaders() {
   return {
     'Gov-Client-Connection-Method': 'BATCH_PROCESS_DIRECT',
@@ -223,7 +232,7 @@ function getFraudPreventionHeaders() {
     'Gov-Client-User-IDs': 'os=railway-service',
     'Gov-Vendor-License-IDs': 'vat-validator-mcp=not-applicable',
     'Gov-Vendor-Product-Name': 'VAT%20Validator%20MCP',
-    'Gov-Vendor-Version': 'vat-validator-mcp=2.0.2'
+    'Gov-Vendor-Version': 'vat-validator-mcp=2.0.3'
   };
 }
 
@@ -245,32 +254,23 @@ async function getHMRCToken() {
 
   const body = `client_secret=${encodeURIComponent(clientSecret)}&client_id=${encodeURIComponent(clientId)}&grant_type=client_credentials&scope=read%3Avat`;
 
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname,
-      path: '/oauth/token',
+  try {
+    const response = await hmrcFetchWithRetry(`https://${hostname}/oauth/token`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body), ...getFraudPreventionHeaders() }
-    }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(d);
-          if (json.access_token) {
-            hmrcToken = json.access_token;
-            hmrcTokenExpiry = now + (json.expires_in || 14400) * 1000;
-            resolve(hmrcToken);
-          } else {
-            resolve(null);
-          }
-        } catch(e) { resolve(null); }
-      });
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getFraudPreventionHeaders() },
+      body,
+      signal: AbortSignal.timeout(8000)
     });
-    req.on('error', () => resolve(null));
-    req.setTimeout(8000, () => { req.destroy(); resolve(null); });
-    req.write(body);
-    req.end();
-  });
+    const json = await response.json();
+    if (json.access_token) {
+      hmrcToken = json.access_token;
+      hmrcTokenExpiry = now + (json.expires_in || 14400) * 1000;
+      return hmrcToken;
+    }
+    return null;
+  } catch(e) {
+    return null;
+  }
 }
 
 async function validateHMRC(vatNumber) {
@@ -281,23 +281,18 @@ async function validateHMRC(vatNumber) {
   const sandbox = process.env.HMRC_SANDBOX === 'true';
   const hostname = sandbox ? 'test-api.service.hmrc.gov.uk' : 'api.service.hmrc.gov.uk';
 
-  return new Promise((resolve) => {
-    const req = https.request({
-      hostname,
-      path: '/organisations/vat/check-vat-number/lookup/' + clean,
+  try {
+    const response = await hmrcFetchWithRetry(`https://${hostname}/organisations/vat/check-vat-number/lookup/${clean}`, {
       method: 'GET',
-      headers: { 'Accept': 'application/vnd.hmrc.2.0+json', 'Authorization': 'Bearer ' + token, ...getFraudPreventionHeaders() }
-    }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => {
-        try { resolve({ source: 'HMRC', status: res.statusCode, data: JSON.parse(d) }); }
-        catch(e) { resolve({ source: 'HMRC', error: 'Parse error' }); }
-      });
+      headers: { 'Accept': 'application/vnd.hmrc.2.0+json', 'Authorization': 'Bearer ' + token, ...getFraudPreventionHeaders() },
+      signal: AbortSignal.timeout(8000)
     });
-    req.on('error', e => resolve({ source: 'HMRC', error: e.message }));
-    req.setTimeout(8000, () => { req.destroy(); resolve({ source: 'HMRC', error: 'Timeout' }); });
-    req.end();
-  });
+    const data = await response.json();
+    return { source: 'HMRC', status: response.status, data };
+  } catch(e) {
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') return { source: 'HMRC', error: 'Timeout' };
+    return { source: 'HMRC', error: e.message };
+  }
 }
 
 async function validateABN(abn) {

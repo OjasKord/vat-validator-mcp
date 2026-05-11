@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.3 — 2026-05-11
+
+v2.0.3 — add HMRC 429 retry with exponential backoff (3 req/sec limit compliance)
+
 ## v2.0.2 — 2026-05-11
 
 v2.0.2 — add mandatory HMRC fraud prevention headers (BATCH_PROCESS_DIRECT) per VAT MTD API legal requirement
