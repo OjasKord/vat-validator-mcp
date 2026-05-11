@@ -5,6 +5,16 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.1 — 2026-05-11
+
+fix: constrain recommendation to CLEAR/REVIEW/BLOCK enum in Claude prompt for `validate_vat`; fix: `get_vat_rates` source_url corrected to `taxation-customs.ec.europa.eu/tedb/taxes-list.html`.
+
+## v2.0.0 — 2026-05-11
+
+Redesign: collapsed 6 tools to 2. `validate_vat` now auto-detects jurisdiction (EU/UK/AU), runs fraud analysis internally, and cross-checks invoice details in one call. Removed: `validate_uk_vat`, `batch_validate`, `analyse_vat_risk`, `compare_invoice_details`. `get_vat_rates` retained unchanged. Zero chained inputs — all tools are now self-contained.
+
+---
+
 ## v1.4.13 — 2026-05-08
 
 billing upgrade: Upstash Redis persistent key storage, monthly period reset, metered billing via Stripe Meter Events API, dual billing options (pay-as-you-go + bundles), /subscribe and /subscribed endpoints, FREE_TIER_LIMIT updated to 50

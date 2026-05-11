@@ -6,7 +6,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.0';
+const VERSION = '2.0.1';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PORT = process.env.PORT || 3000;
@@ -445,6 +445,8 @@ Analyze for: registration status, jurisdiction risk factors, name mismatch betwe
 
 Name match rules: if no invoice_company_name was provided set name_match to "NOT_CHECKED". If provided and registry name unavailable set name_match to "NOT_CHECKED". If both available compare them: "MATCH" if they clearly refer to the same company (allow abbreviations and legal suffix variations), "MISMATCH" if clearly different companies.
 
+recommendation must be exactly one of: CLEAR, REVIEW, or BLOCK. No other values permitted. CLEAR = valid, low risk. REVIEW = valid but requires manual verification. BLOCK = invalid or high/critical risk.
+
 Return ONLY valid JSON with no preamble or markdown:
 {"fraud_risk_score":0,"fraud_risk_level":"LOW","fraud_signals":[],"name_match":"NOT_CHECKED","recommendation":"CLEAR","summary":"one sentence plain English"}`;
 
@@ -506,11 +508,11 @@ Return ONLY valid JSON with no preamble or markdown:
   if (name === 'get_vat_rates') {
     const country_code = args.country_code;
     const checkedAt = nowISO();
-    if (!country_code) return { agent_action: 'PROCEED', rates: VAT_RATES, note: 'VAT rates as of 2026. Verify with official tax authority before use.', source_url: 'kordagencies.com', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+    if (!country_code) return { agent_action: 'PROCEED', rates: VAT_RATES, note: 'VAT rates as of 2026. Verify with official tax authority before use.', source_url: 'taxation-customs.ec.europa.eu/tedb/taxes-list.html', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
     const code = country_code.toUpperCase();
     const rate = VAT_RATES[code];
     if (!rate) return { error: 'No VAT rate data for: ' + code + '. Supported: ' + Object.keys(VAT_RATES).join(', '), agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
-    return Object.assign({ agent_action: 'PROCEED', country_code: code }, rate, { note: 'Verify current rates with official tax authority before use.', source_url: 'kordagencies.com', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER });
+    return Object.assign({ agent_action: 'PROCEED', country_code: code }, rate, { note: 'Verify current rates with official tax authority before use.', source_url: 'taxation-customs.ec.europa.eu/tedb/taxes-list.html', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER });
   }
 
   return { error: 'Unknown tool: ' + name, agent_action: 'RETRY_IN_2_MIN', category: 'unknown_tool', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
