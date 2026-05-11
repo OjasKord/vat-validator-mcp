@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.4 — 2026-05-11
+
+feat: session co-occurrence logging to Redis — tracks tool call sequences per IP per day
+
 ## v2.0.3 — 2026-05-11
 
 v2.0.3 — add HMRC 429 retry with exponential backoff (3 req/sec limit compliance)
