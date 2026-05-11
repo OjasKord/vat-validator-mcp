@@ -6,7 +6,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '1.4.13';
+const VERSION = '2.0.0';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PORT = process.env.PORT || 3000;
@@ -298,6 +298,7 @@ async function validateABN(abn) {
 function detectCountry(vatNumber) {
   const clean = vatNumber.trim().toUpperCase().replace(/\s/g, '');
   if (clean.startsWith('GB')) return { country: 'GB', type: 'uk', number: clean.slice(2) };
+  if (clean.startsWith('ABN')) return { country: 'AU', type: 'au', number: clean.slice(3) };
   if (clean.startsWith('AU') || /^\d{11}$/.test(clean)) return { country: 'AU', type: 'au', number: clean };
   const euCodes = ['AT','BE','BG','CY','CZ','DE','DK','EE','EL','ES','FI','FR','HR','HU','IE','IT','LT','LU','LV','MT','NL','PL','PT','RO','SE','SI','SK'];
   for (const code of euCodes) {
@@ -328,42 +329,178 @@ const VAT_RATES = {
 
 async function executeTool(name, args) {
   if (name === 'validate_vat') {
-    const vat_number = args.vat_number;
+    const { vat_number, invoice_company_name, invoice_amount } = args;
     const checkedAt = nowISO();
-    if (!vat_number) return { error: 'vat_number is required', likely_cause: 'required field missing or malformed', agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
-    const detected = detectCountry(vat_number);
-    if (detected.type === 'uk') {
-      const result = await validateHMRC(detected.number);
-      if (result.error) return { valid: null, vat_number, country: 'GB', source: 'HMRC', error: result.error, likely_cause: 'external VAT registry temporarily unavailable', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), retry: true, _disclaimer: LEGAL_DISCLAIMER };
-      const d = result.data;
-      if (result.status === 200 && d.target) return { valid: true, agent_action: 'PROCEED', vat_number, country: 'GB', company_name: d.target.name || null, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', consultation_number: d.consultationNumber || null, checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-      return { valid: false, agent_action: 'VERIFY_MANUALLY', vat_number, country: 'GB', source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', reason: d.code || 'VAT number not found', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-    }
-    if (detected.type === 'eu') {
-      const result = await validateVIES(detected.country, detected.number);
-      if (result.error) return { valid: null, vat_number, agent_action: 'RETRY_IN_30_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 1800000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), country: detected.country, source: 'VIES', source_url: 'ec.europa.eu/taxation_customs/vies', error: 'EU VIES portal is temporarily unavailable — this is a known issue with the official EU system, not a problem with the VAT number. Retry in 30 minutes.', likely_cause: 'external VAT registry temporarily unavailable', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-      const d = result.data;
-      return { valid: d.isValid || false, agent_action: d.isValid ? 'PROCEED' : 'VERIFY_MANUALLY', vat_number, country: detected.country, company_name: d.traderName || null, address: d.traderAddress || null, source: 'VIES', source_url: 'ec.europa.eu/taxation_customs/vies', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-    }
-    if (detected.type === 'au') {
-      const result = await validateABN(detected.number);
-      if (result.error) return { valid: null, vat_number, country: 'AU', source: 'ABR', error: result.error, likely_cause: 'external VAT registry temporarily unavailable', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
-      const d = result.data;
-      const isValidABN = !!(d.Abn && d.AbnStatus === 'Active');
-      return { valid: isValidABN, agent_action: isValidABN ? 'PROCEED' : 'VERIFY_MANUALLY', vat_number, country: 'AU', company_name: d.EntityName || null, abn_status: d.AbnStatus || null, source: 'ABR', source_url: 'abr.business.gov.au', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-    }
-    return { valid: null, vat_number, agent_action: 'PROVIDE_COUNTRY_PREFIX', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), error: 'Could not detect country. Supported prefixes: EU (AT BE BG CY CZ DE DK EE EL ES FI FR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK), UK (GB), Australia (AU).', likely_cause: 'required field missing or malformed', _disclaimer: LEGAL_DISCLAIMER };
-  }
 
-  if (name === 'validate_uk_vat') {
-    const vat_number = args.vat_number;
-    const checkedAt = nowISO();
-    if (!vat_number) return { error: 'vat_number is required', likely_cause: 'required field missing or malformed', agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
-    const result = await validateHMRC(vat_number);
-    if (result.error) return { valid: null, vat_number, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', error: 'UK HMRC API is temporarily unavailable — this is not a problem with the VAT number. Retry in a few minutes.', likely_cause: 'external VAT registry temporarily unavailable', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-    const d = result.data;
-    if (result.status === 200 && d.target) return { valid: true, agent_action: 'PROCEED', vat_number, company_name: d.target.name || null, registered_address: d.target.address ? Object.values(d.target.address).filter(Boolean).join(', ') : null, consultation_number: d.consultationNumber || null, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
-    return { valid: false, agent_action: 'VERIFY_MANUALLY', vat_number, source: 'HMRC', source_url: 'api.service.hmrc.gov.uk', reason: d.code || 'VAT number not found', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+    if (!vat_number) return {
+      error: 'vat_number is required',
+      agent_action: 'PROVIDE_REQUIRED_FIELD',
+      category: 'invalid_input',
+      retryable: false,
+      retry_after_ms: null,
+      fallback_tool: null,
+      trace_id: Math.random().toString(36).slice(2, 10)
+    };
+
+    const detected = detectCountry(vat_number);
+    let valid = false;
+    let company_name = null;
+    let address = null;
+    let jurisdiction = '';
+    let sourceUrl = '';
+
+    if (detected.type === 'uk') {
+      jurisdiction = 'UK';
+      sourceUrl = 'api.service.hmrc.gov.uk';
+      const result = await validateHMRC(detected.number);
+      if (result.error) return {
+        error: result.error,
+        vat_number,
+        jurisdiction,
+        agent_action: 'RETRY_IN_2_MIN',
+        category: 'upstream_unavailable',
+        retryable: true,
+        retry_after_ms: 120000,
+        fallback_tool: null,
+        trace_id: Math.random().toString(36).slice(2, 10),
+        source_url: sourceUrl,
+        checked_at: checkedAt,
+        _disclaimer: LEGAL_DISCLAIMER
+      };
+      const d = result.data;
+      if (result.status === 200 && d.target) {
+        valid = true;
+        company_name = d.target.name || null;
+        address = d.target.address ? Object.values(d.target.address).filter(Boolean).join(', ') : null;
+      }
+    } else if (detected.type === 'eu') {
+      jurisdiction = 'EU';
+      sourceUrl = 'ec.europa.eu/taxation_customs/vies';
+      const result = await validateVIES(detected.country, detected.number);
+      if (result.error) return {
+        error: 'EU VIES portal is temporarily unavailable — this is a known issue with the official EU system, not a problem with the VAT number. Retry in 30 minutes.',
+        vat_number,
+        jurisdiction,
+        agent_action: 'RETRY_IN_30_MIN',
+        category: 'upstream_unavailable',
+        retryable: true,
+        retry_after_ms: 1800000,
+        fallback_tool: null,
+        trace_id: Math.random().toString(36).slice(2, 10),
+        source_url: sourceUrl,
+        checked_at: checkedAt,
+        _disclaimer: LEGAL_DISCLAIMER
+      };
+      const d = result.data;
+      valid = d.isValid || false;
+      company_name = d.traderName || null;
+      address = d.traderAddress || null;
+    } else if (detected.type === 'au') {
+      jurisdiction = 'AU';
+      sourceUrl = 'abr.business.gov.au';
+      const result = await validateABN(detected.number);
+      if (result.error) return {
+        error: result.error,
+        vat_number,
+        jurisdiction,
+        agent_action: 'RETRY_IN_2_MIN',
+        category: 'upstream_unavailable',
+        retryable: true,
+        retry_after_ms: 120000,
+        fallback_tool: null,
+        trace_id: Math.random().toString(36).slice(2, 10),
+        source_url: sourceUrl,
+        checked_at: checkedAt,
+        _disclaimer: LEGAL_DISCLAIMER
+      };
+      const d = result.data;
+      valid = !!(d.Abn && d.AbnStatus === 'Active');
+      company_name = d.EntityName || null;
+    } else {
+      return {
+        error: 'Could not detect country. Supported prefixes: EU (AT BE BG CY CZ DE DK EE EL ES FI FR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK), UK (GB), Australia (AU or ABN).',
+        vat_number,
+        agent_action: 'PROVIDE_COUNTRY_PREFIX',
+        category: 'invalid_input',
+        retryable: false,
+        retry_after_ms: null,
+        fallback_tool: null,
+        trace_id: Math.random().toString(36).slice(2, 10),
+        _disclaimer: LEGAL_DISCLAIMER
+      };
+    }
+
+    // AI fraud risk analysis — runs internally, result is always returned in one call
+    const nameSection = invoice_company_name ? `Invoice Company Name: ${invoice_company_name}\n` : '';
+    const amountSection = invoice_amount != null ? `Invoice Amount: ${invoice_amount}\n` : '';
+    const prompt = `You are a B2B fraud detection specialist. Analyze this VAT validation result for fraud risk.
+
+VAT Number: ${vat_number}
+Jurisdiction: ${jurisdiction}
+Valid/Active: ${valid}
+Registered Company Name: ${company_name || 'Not available from registry'}
+Registered Address: ${address || 'Not available from registry'}
+${nameSection}${amountSection}
+Analyze for: registration status, jurisdiction risk factors, name mismatch between invoice and registry (if invoice company name provided), address anomalies, shell company indicators, missing trader fraud patterns, recently registered entity risk.
+
+Name match rules: if no invoice_company_name was provided set name_match to "NOT_CHECKED". If provided and registry name unavailable set name_match to "NOT_CHECKED". If both available compare them: "MATCH" if they clearly refer to the same company (allow abbreviations and legal suffix variations), "MISMATCH" if clearly different companies.
+
+Return ONLY valid JSON with no preamble or markdown:
+{"fraud_risk_score":0,"fraud_risk_level":"LOW","fraud_signals":[],"name_match":"NOT_CHECKED","recommendation":"CLEAR","summary":"one sentence plain English"}`;
+
+    let fraudRiskScore = 50;
+    let fraudRiskLevel = 'MEDIUM';
+    let fraudSignals = [];
+    let nameMatch = 'NOT_CHECKED';
+    let recommendation = 'REVIEW';
+    let summary = 'Manual review recommended — AI analysis unavailable.';
+
+    try {
+      const aiResponse = await callClaude(prompt);
+      const parsed = JSON.parse(aiResponse.replace(/```json|```/g, '').trim());
+      fraudRiskScore = typeof parsed.fraud_risk_score === 'number' ? parsed.fraud_risk_score : fraudRiskScore;
+      fraudRiskLevel = parsed.fraud_risk_level || fraudRiskLevel;
+      fraudSignals = Array.isArray(parsed.fraud_signals) ? parsed.fraud_signals : [];
+      nameMatch = parsed.name_match || nameMatch;
+      recommendation = parsed.recommendation || recommendation;
+      summary = parsed.summary || summary;
+    } catch(e) {
+      if (!valid) {
+        fraudRiskLevel = 'HIGH';
+        fraudRiskScore = 75;
+        fraudSignals = ['VAT number invalid or deregistered'];
+        recommendation = 'BLOCK';
+        summary = 'VAT number is invalid or deregistered.';
+      }
+    }
+
+    let agentAction;
+    if (!valid || fraudRiskLevel === 'CRITICAL' || nameMatch === 'MISMATCH') {
+      agentAction = 'HOLD';
+    } else if (fraudRiskLevel === 'HIGH' || fraudRiskLevel === 'MEDIUM') {
+      agentAction = 'VERIFY_MANUALLY';
+    } else {
+      agentAction = 'PROCEED';
+    }
+
+    return {
+      agent_action: agentAction,
+      valid,
+      vat_number,
+      jurisdiction,
+      company_name,
+      address,
+      fraud_risk_score: fraudRiskScore,
+      fraud_risk_level: fraudRiskLevel,
+      fraud_signals: fraudSignals,
+      name_match: nameMatch,
+      recommendation,
+      summary,
+      source_url: sourceUrl,
+      checked_at: checkedAt,
+      _disclaimer: LEGAL_DISCLAIMER,
+      ai_notice: 'AI-powered fraud analysis — NOT a simple database lookup'
+    };
   }
 
   if (name === 'get_vat_rates') {
@@ -372,53 +509,11 @@ async function executeTool(name, args) {
     if (!country_code) return { agent_action: 'PROCEED', rates: VAT_RATES, note: 'VAT rates as of 2026. Verify with official tax authority before use.', source_url: 'kordagencies.com', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
     const code = country_code.toUpperCase();
     const rate = VAT_RATES[code];
-    if (!rate) return { error: 'No VAT rate data for: ' + code + '. Supported: ' + Object.keys(VAT_RATES).join(', '), likely_cause: 'required field missing or malformed', agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
+    if (!rate) return { error: 'No VAT rate data for: ' + code + '. Supported: ' + Object.keys(VAT_RATES).join(', '), agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
     return Object.assign({ agent_action: 'PROCEED', country_code: code }, rate, { note: 'Verify current rates with official tax authority before use.', source_url: 'kordagencies.com', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER });
   }
 
-  if (name === 'batch_validate') {
-    const vat_numbers = args.vat_numbers;
-    if (!vat_numbers || !Array.isArray(vat_numbers)) return { error: 'vat_numbers must be an array', likely_cause: 'required field missing or malformed', agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
-    if (vat_numbers.length > 10) return { error: 'Maximum 10 VAT numbers per batch. Upgrade to Enterprise at kordagencies.com for unlimited batches.', likely_cause: 'required field missing or malformed', agent_action: 'Reduce batch to 10 or fewer, or upgrade to Enterprise at kordagencies.com', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
-    const results = await Promise.all(vat_numbers.map(async (vat) => {
-      try { return await executeTool('validate_vat', { vat_number: vat }); }
-      catch(e) { return { vat_number: vat, valid: null, error: e.message, likely_cause: 'external VAT registry temporarily unavailable', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) }; }
-    }));
-    return { agent_action: 'PROCEED', summary: { total: results.length, valid: results.filter(r => r.valid === true).length, invalid: results.filter(r => r.valid === false).length, error: results.filter(r => r.valid === null).length }, results, _disclaimer: LEGAL_DISCLAIMER };
-  }
-
-  if (name === 'analyse_vat_risk') {
-    const vat_number = args.vat_number;
-    const validation_result = args.validation_result;
-    const invoice_amount = args.invoice_amount;
-    const invoice_company_name = args.invoice_company_name;
-    if (!vat_number || !validation_result) return { error: 'vat_number and validation_result are required', likely_cause: 'required field missing or malformed', agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
-    const prompt = 'You are a B2B fraud detection specialist. Analyse this VAT validation result for fraud signals.\n\nVAT Number: ' + vat_number + '\nValidation Result: ' + JSON.stringify(validation_result) + '\nInvoice Amount: ' + (invoice_amount ? String(invoice_amount) : 'Not provided') + '\nInvoice Company Name: ' + (invoice_company_name || 'Not provided') + '\nRegistered Company Name: ' + (validation_result.company_name || 'Not available') + '\nValid: ' + validation_result.valid + '\nCountry: ' + validation_result.country + '\n\nAnalyse for: name mismatch between invoice and registry, recently registered company, dormant or dissolved status, high invoice amount relative to company size, address anomalies, shell company indicators.\n\nReturn ONLY valid JSON with no preamble: {"recommendation":"CLEAR|REVIEW|BLOCK","risk_level":"LOW|MEDIUM|HIGH|CRITICAL","risk_score":50,"fraud_signals":[],"positive_indicators":[],"recommended_action":"one sentence","summary":"two sentences"}';
-    try {
-      const response = await callClaude(prompt);
-      const result = JSON.parse(response.replace(/```json|```/g, '').trim());
-      const vatRiskAction = (result.risk_level === 'HIGH' || result.risk_level === 'CRITICAL') ? 'HOLD' : result.risk_level === 'MEDIUM' ? 'VERIFY_MANUALLY' : 'PROCEED';
-      return Object.assign({}, result, { vat_number, agent_action: vatRiskAction, _disclaimer: LEGAL_DISCLAIMER });
-    } catch(e) {
-      return { recommendation: 'REVIEW', risk_level: 'MEDIUM', risk_score: 50, vat_number, error: 'AI analysis unavailable - manual review recommended', likely_cause: 'AI analysis failed — transient Anthropic API issue', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
-    }
-  }
-
-  if (name === 'compare_invoice_details') {
-    const { invoice_company_name, invoice_address, invoice_vat_number, validation_result } = args;
-    if (!invoice_company_name || !invoice_vat_number || !validation_result) return { error: 'invoice_company_name, invoice_vat_number, and validation_result are required', likely_cause: 'required field missing or malformed', agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
-    const prompt = 'You are an invoice fraud detection specialist. Compare invoice details against official registry records.\n\nINVOICE CLAIMS:\nCompany Name: ' + invoice_company_name + '\nAddress: ' + (invoice_address || 'Not provided') + '\nVAT Number: ' + invoice_vat_number + '\n\nOFFICIAL REGISTRY RECORDS:\nRegistered Company Name: ' + (validation_result.company_name || 'Not available from registry') + '\nRegistered Address: ' + (validation_result.address || validation_result.registered_address || 'Not available from registry') + '\nVAT Valid: ' + validation_result.valid + '\nCountry: ' + validation_result.country + '\n\nAnalyse for: name discrepancies, address discrepancies, signs of invoice fraud or impersonation.\n\nReturn ONLY valid JSON with no preamble: {"match_verdict":"MATCH|PARTIAL_MATCH|MISMATCH|UNVERIFIABLE","name_match":"EXACT|SIMILAR|DIFFERENT|UNVERIFIABLE","address_match":"MATCH|DIFFERENT|UNVERIFIABLE","vat_valid":true,"discrepancies":[],"fraud_risk":"LOW|MEDIUM|HIGH","recommendation":"APPROVE|REVIEW|REJECT","recommended_action":"one sentence","summary":"two sentences"}';
-    try {
-      const response = await callClaude(prompt);
-      const result = JSON.parse(response.replace(/```json|```/g, '').trim());
-      const agentAction = result.match_verdict === 'MATCH' ? 'PROCEED' : 'INVESTIGATE';
-      return Object.assign({}, result, { invoice_vat_number, agent_action: agentAction, discrepancies: result.discrepancies || [], _disclaimer: LEGAL_DISCLAIMER });
-    } catch(e) {
-      return { match_verdict: 'UNVERIFIABLE', agent_action: 'RETRY_IN_2_MIN', category: 'upstream_unavailable', retryable: true, retry_after_ms: 120000, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), fraud_risk: 'MEDIUM', invoice_vat_number, discrepancies: [], error: 'AI analysis unavailable -- manual review recommended', likely_cause: 'AI analysis failed — transient Anthropic API issue', _disclaimer: LEGAL_DISCLAIMER };
-    }
-  }
-
-  return { error: 'Unknown tool: ' + name, likely_cause: 'required field missing or malformed', agent_action: 'RETRY_IN_2_MIN', category: 'unknown_tool', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
+  return { error: 'Unknown tool: ' + name, agent_action: 'RETRY_IN_2_MIN', category: 'unknown_tool', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
 }
 
 function checkAccess(req) {
@@ -558,12 +653,32 @@ async function handleStripeWebhook(body, sig) {
 }
 
 const tools = [
-  { name: 'validate_vat', idempotent: true, description: 'Call this BEFORE your agent approves any EU supplier, issues a cross-border invoice, or processes an inbound EU payment. Validates VAT registration numbers against EU VIES (all 27 member states) and AU ABR in real time. Returns valid/invalid status, registered company name, and address — data your agent cannot retrieve reliably from training data. A deregistered or invalid VAT number on an approved invoice creates an unrecoverable tax liability. One call eliminates that risk. Returns structured JSON with machine-readable fields — no further analysis needed.', inputSchema: { type: 'object', properties: { vat_number: { type: 'string', description: 'VAT number with country prefix (e.g. DE123456789, GB123456789, FR12345678901)' } }, required: ['vat_number'] } },
-  { name: 'validate_uk_vat', idempotent: true, description: 'Call this BEFORE your agent approves any UK supplier, issues a UK VAT invoice, or processes a UK inbound payment. Validates UK VAT numbers directly against HMRC VAT API v2 via OAuth2 — the only authoritative UK source. Returns valid/invalid, registered business name, and address. An invalid UK VAT number on an approved invoice triggers HMRC penalties with no appeal path. One call, authoritative source, machine-readable verdict.', inputSchema: { type: 'object', properties: { vat_number: { type: 'string', description: 'UK VAT number with or without GB prefix' } }, required: ['vat_number'] } },
-  { name: 'get_vat_rates', idempotent: true, description: 'Call this BEFORE your agent calculates invoice totals, applies tax rates, or generates VAT-inclusive pricing for any EU country or UK. Returns current standard, reduced, and zero VAT rates for all 27 EU member states and UK. VAT rates change without notice — your agent cannot rely on training data for current rates. Returns structured JSON — no parsing needed.', inputSchema: { type: 'object', properties: { country_code: { type: 'string', description: 'ISO 2-letter country code (e.g. DE, FR, GB). Leave blank for all countries.' } }, required: [] } },
-  { name: 'batch_validate', idempotent: true, description: 'Call this when your agent needs to validate multiple supplier VAT numbers in a single workflow — onboarding a supplier list, auditing an invoice batch, or screening a counterparty database. Validates against EU VIES and HMRC in one call. One undetected invalid VAT number in a supplier batch creates downstream tax exposure across every transaction with that supplier. Returns per-number verdicts in structured JSON.', inputSchema: { type: 'object', properties: { vat_numbers: { type: 'array', items: { type: 'string' }, description: 'Array of VAT numbers with country prefixes (max 10)' } }, required: ['vat_numbers'] } },
-  { name: 'analyse_vat_risk', idempotent: true, description: 'Call this BEFORE your agent approves a high-value invoice, onboards a new EU or UK supplier, or processes any cross-border payment where VAT fraud is a material risk. AI-powered fraud risk scoring — NOT a simple database lookup. Analyses VAT registration patterns, company age, jurisdiction risk, and invoice behaviour to detect missing trader fraud, carousel fraud, and deregistered entity re-use. Returns CLEAR/REVIEW/BLOCK recommendation, risk score 0-100, fraud signals list, and agent_action field (PROCEED/VERIFY_MANUALLY/HOLD) — no further analysis needed. The only MCP that combines live VIES validation with AI fraud pattern detection.', inputSchema: { type: 'object', properties: { vat_number: { type: 'string', description: 'The VAT number that was validated' }, validation_result: { type: 'object', description: 'The full result object returned by validate_vat or validate_uk_vat' }, invoice_amount: { type: 'number', description: 'Optional - invoice or transaction amount in local currency.' }, invoice_company_name: { type: 'string', description: 'Optional - company name as it appears on the invoice.' } }, required: ['vat_number', 'validation_result'] } },
-  { name: 'compare_invoice_details', idempotent: true, description: 'Call this BEFORE your agent finalises payment on any invoice where the supplier VAT number, company name, or address requires verification. Cross-checks invoice details against live VIES and HMRC registry data. A single name mismatch between invoice and registry is the most common signal of invoice fraud — one call catches it before payment is authorised. Returns MATCH/MISMATCH verdict with field-level detail and agent_action. Machine-ready output, no parsing needed.', inputSchema: { type: 'object', properties: { invoice_company_name: { type: 'string', description: 'Company name as it appears on the invoice' }, invoice_address: { type: 'string', description: 'Address as it appears on the invoice (optional)' }, invoice_vat_number: { type: 'string', description: 'VAT number as it appears on the invoice' }, validation_result: { type: 'object', description: 'The full result object returned by validate_vat or validate_uk_vat for this VAT number' } }, required: ['invoice_company_name', 'invoice_vat_number', 'validation_result'] } }
+  {
+    name: 'validate_vat',
+    idempotent: true,
+    description: 'Call this BEFORE your agent approves any supplier invoice, onboards a new EU/UK/AU vendor, or processes any cross-border payment. Validates VAT numbers against EU VIES (all 27 member states), UK HMRC VAT API v2, and AU ABR — auto-detects jurisdiction from the number prefix. Returns valid/invalid status, registered company name, address, and AI-powered fraud risk score 0-100 with PROCEED/VERIFY_MANUALLY/HOLD verdict. An invalid or deregistered VAT number on an approved invoice creates unrecoverable tax liability. One call, three jurisdictions, machine-ready verdict — no further analysis needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        vat_number: { type: 'string', description: 'VAT number with country prefix. EU: DE123456789. UK: GB123456789. AU: ABN12345678901.' },
+        invoice_company_name: { type: 'string', description: 'Company name as it appears on the invoice — if provided, cross-checks against registry and flags mismatches.' },
+        invoice_amount: { type: 'number', description: 'Invoice amount in local currency — used in fraud risk weighting.' }
+      },
+      required: ['vat_number']
+    }
+  },
+  {
+    name: 'get_vat_rates',
+    idempotent: true,
+    description: 'Call this BEFORE your agent calculates invoice totals, applies tax rates, generates VAT-inclusive pricing, or validates that a VAT amount on an invoice is correct for a given country. Returns current standard, reduced, and zero VAT rates for all 27 EU member states and UK. VAT rates change without notice — your agent cannot rely on training data for current rates. Returns machine-readable JSON — no parsing needed. Omit country_code to get all countries.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        country_code: { type: 'string', description: 'ISO 2-letter code e.g. DE, FR, GB. Omit for all countries.' }
+      },
+      required: []
+    }
+  }
 ];
 
 const sseClients = new Map();
@@ -655,7 +770,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/.well-known/mcp/server-card.json' && req.method === 'GET') {
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ name: 'vat-validator-mcp', title: 'VAT Validator MCP', version: VERSION, description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN. Free tier: 20 calls/month.', tools: tools.map(t => t.name), transport: 'streamable-http', homepage: 'https://kordagencies.com', token_footprint_min: 100, token_footprint_max: 600, token_footprint_avg: 200, idempotent_tools: ['validate_vat', 'validate_uk_vat', 'get_vat_rates', 'batch_validate', 'analyse_vat_risk', 'compare_invoice_details'], circuit_breaker: false, health_endpoint: '/health', ready_endpoint: '/ready' }));
+    res.end(JSON.stringify({ name: 'vat-validator-mcp', title: 'VAT Validator MCP', version: VERSION, description: 'VAT number validator for AI agents. EU VIES, UK HMRC, AU ABR — auto-detects jurisdiction. Fraud risk scoring and invoice name cross-check in one call.', tools: tools.map(t => t.name), transport: 'streamable-http', homepage: 'https://kordagencies.com', token_footprint_min: 100, token_footprint_max: 600, token_footprint_avg: 200, idempotent_tools: ['validate_vat', 'get_vat_rates'], circuit_breaker: false, health_endpoint: '/health', ready_endpoint: '/ready' }));
     return;
   }
 
@@ -686,7 +801,7 @@ const server = http.createServer(async (req, res) => {
         const request = JSON.parse(body);
         let response;
         if (request.method === 'initialize') {
-          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every accounts-payable pipeline reaches a moment where an agent must validate a VAT registration or approve an invoice without being able to reason its way to a reliable answer. VAT Validator MCP answers that question in real time -- live checks against EU VIES, UK HMRC, and Australian ABR, with AI-powered invoice comparison. An agent acting on stale VAT data has no defence against a tax authority. Used before any invoice payment, supplier onboarding, or cross-border transaction.' } } };
+          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'VAT Validator MCP v2. validate_vat auto-detects EU/UK/AU jurisdiction, validates against live government registries, and returns AI-powered fraud risk scoring — all in one call. No chained inputs, no prior state required.' } } };
         } else if (request.method === 'notifications/initialized') {
           res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') {
@@ -742,7 +857,7 @@ const server = http.createServer(async (req, res) => {
           req._tier = access.tier;
           req._accessResult = access;
         }
-        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every accounts-payable pipeline reaches a moment where an agent must validate a VAT registration or approve an invoice without being able to reason its way to a reliable answer. VAT Validator MCP answers that question in real time -- live checks against EU VIES, UK HMRC, and Australian ABR, with AI-powered invoice comparison. An agent acting on stale VAT data has no defence against a tax authority. Used before any invoice payment, supplier onboarding, or cross-border transaction.' } } };
+        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'VAT Validator MCP v2. validate_vat auto-detects EU/UK/AU jurisdiction, validates against live government registries, and returns AI-powered fraud risk scoring — all in one call. No chained inputs, no prior state required.' } } };
         } else if (request.method === 'notifications/initialized') { res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') { response = { jsonrpc: '2.0', id: request.id, result: { tools } };
         } else if (request.method === 'resources/list') { response = { jsonrpc: '2.0', id: request.id, result: { resources: [] } };
@@ -761,31 +876,16 @@ const server = http.createServer(async (req, res) => {
             reportMeteredUsage(req._accessResult.stripeCustomerId, 'vat_query').catch(() => {});
           }
 
-          // Partial response for free tier
           if (req._tier === 'free' && !result.error) {
             const used = freeTierUsage.get(getMonthKey(ip)) || 0;
             const remaining = FREE_TIER_LIMIT - used;
             const isWarning = used >= FREE_TIER_WARNING;
             const effectiveLimit = getEffectiveLimit(ip);
 
-            if (name === 'validate_vat' || name === 'validate_uk_vat') {
-              const gated = ['registered_address', 'address', 'consultation_number'];
+            if (name === 'validate_vat') {
+              const gated = ['fraud_signals', 'address'];
               gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire. Includes full registered address and HMRC consultation number.';
-              result._gated_fields = gated;
-            }
-
-            if (name === 'analyse_vat_risk') {
-              const gated = ['fraud_signals', 'positive_indicators', 'recommended_action', 'summary'];
-              gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire. Includes full fraud signal breakdown, positive indicators, and recommended action.';
-              result._gated_fields = gated;
-            }
-
-            if (name === 'compare_invoice_details') {
-              const gated = ['discrepancies', 'name_match', 'address_match', 'recommended_action', 'summary'];
-              gated.forEach(f => delete result[f]);
-              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire. Includes full discrepancy analysis and recommended action.';
+              result._upgrade_note = 'Free tier: ' + remaining + ' of ' + effectiveLimit + ' calls remaining. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire. Includes full registered address and detailed fraud signal breakdown.';
               result._gated_fields = gated;
             }
 
@@ -801,7 +901,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: VERSION, status: 'ok', tools: 6, free_tier: '50 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', subscribe_url: METERED_SUBSCRIBE_URL, bundle_500_url: BUNDLE_500_URL, bundle_2000_url: BUNDLE_2000_URL })); return; }
+  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: VERSION, status: 'ok', tools: 2, free_tier: '50 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', subscribe_url: METERED_SUBSCRIBE_URL, bundle_500_url: BUNDLE_500_URL, bundle_2000_url: BUNDLE_2000_URL })); return; }
 
   if (req.url === '/subscribe' && req.method === 'GET') {
     try {
@@ -869,7 +969,7 @@ function setupStdio() {
       try { req = JSON.parse(line); } catch(e) { return; }
       let response;
       if (req.method === 'initialize') {
-        response = { jsonrpc: '2.0', id: req.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every accounts-payable pipeline reaches a moment where an agent must validate a VAT registration or approve an invoice without being able to reason its way to a reliable answer. VAT Validator MCP answers that question in real time -- live checks against EU VIES, UK HMRC, and Australian ABR, with AI-powered invoice comparison. An agent acting on stale VAT data has no defence against a tax authority. Used before any invoice payment, supplier onboarding, or cross-border transaction.' } } };
+        response = { jsonrpc: '2.0', id: req.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'VAT Validator MCP v2. validate_vat auto-detects EU/UK/AU jurisdiction, validates against live government registries, and returns AI-powered fraud risk scoring — all in one call. No chained inputs, no prior state required.' } } };
       } else if (req.method === 'notifications/initialized') {
         return;
       } else if (req.method === 'tools/list') {
