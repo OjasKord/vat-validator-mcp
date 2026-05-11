@@ -2,11 +2,22 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.1';
+const VERSION = '2.0.2';
+
+// Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
+const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
+let DEVICE_ID;
+try {
+  DEVICE_ID = fs.readFileSync(DEVICE_ID_FILE, 'utf8').trim();
+} catch(e) {
+  DEVICE_ID = crypto.randomUUID();
+  try { fs.writeFileSync(DEVICE_ID_FILE, DEVICE_ID); } catch(we) {}
+}
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PORT = process.env.PORT || 3000;
@@ -200,6 +211,22 @@ async function validateVIES(countryCode, vatNumber) {
   });
 }
 
+function getFraudPreventionHeaders() {
+  return {
+    'Gov-Client-Connection-Method': 'BATCH_PROCESS_DIRECT',
+    'Gov-Client-Device-ID': DEVICE_ID,
+    'Gov-Client-Local-IPs': '127.0.0.1',
+    'Gov-Client-Local-IPs-Timestamp': new Date().toISOString().replace(/(\.\d{3})\d*Z/, '$1Z'),
+    'Gov-Client-MAC-Addresses': 'not-applicable',
+    'Gov-Client-Timezone': 'UTC+00:00',
+    'Gov-Client-User-Agent': 'os-family=Linux&os-version=Server&device-manufacturer=Railway&device-model=Cloud',
+    'Gov-Client-User-IDs': 'os=railway-service',
+    'Gov-Vendor-License-IDs': 'vat-validator-mcp=not-applicable',
+    'Gov-Vendor-Product-Name': 'VAT%20Validator%20MCP',
+    'Gov-Vendor-Version': 'vat-validator-mcp=2.0.2'
+  };
+}
+
 // HMRC OAuth 2.0 token cache
 let hmrcToken = null;
 let hmrcTokenExpiry = 0;
@@ -223,7 +250,7 @@ async function getHMRCToken() {
       hostname,
       path: '/oauth/token',
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) }
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body), ...getFraudPreventionHeaders() }
     }, res => {
       let d = ''; res.on('data', c => d += c);
       res.on('end', () => {
@@ -259,7 +286,7 @@ async function validateHMRC(vatNumber) {
       hostname,
       path: '/organisations/vat/check-vat-number/lookup/' + clean,
       method: 'GET',
-      headers: { 'Accept': 'application/vnd.hmrc.2.0+json', 'Authorization': 'Bearer ' + token }
+      headers: { 'Accept': 'application/vnd.hmrc.2.0+json', 'Authorization': 'Bearer ' + token, ...getFraudPreventionHeaders() }
     }, res => {
       let d = ''; res.on('data', c => d += c);
       res.on('end', () => {

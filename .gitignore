@@ -1,6 +1,7 @@
 node_modules/
 .env
 *.token
+device-id.txt
 *.mcpregistry_github_token
 .mcpregistry_*
 fix.js

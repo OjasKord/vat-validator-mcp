@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.2 — 2026-05-11
+
+v2.0.2 — add mandatory HMRC fraud prevention headers (BATCH_PROCESS_DIRECT) per VAT MTD API legal requirement
+
 ## v2.0.1 — 2026-05-11
 
 fix: constrain recommendation to CLEAR/REVIEW/BLOCK enum in Claude prompt for `validate_vat`; fix: `get_vat_rates` source_url corrected to `taxation-customs.ec.europa.eu/tedb/taxes-list.html`.
