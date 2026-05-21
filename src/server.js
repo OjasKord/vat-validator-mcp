@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.5';
+const VERSION = '2.0.6';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -79,6 +79,7 @@ async function redisGet(key) {
       { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
     );
     const data = await res.json();
+    if (data.error) console.error('[Redis] redisGet error:', data.error, 'key:', key);
     if (!data.result) return null;
     return JSON.parse(data.result);
   } catch(e) { return null; }
@@ -86,26 +87,23 @@ async function redisGet(key) {
 
 async function redisSet(key, value) {
   try {
-    await fetch(
-      `${UPSTASH_URL}/set/${encodeURIComponent(key)}`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${UPSTASH_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ value: JSON.stringify(value) })
-      }
-    );
+    const res = await fetch(`${process.env.UPSTASH_REDIS_REST_URL}/set/${encodeURIComponent(key)}/${encodeURIComponent(JSON.stringify(value))}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` }
+    });
+    const data = await res.json();
+    if (data.error) console.error('[Redis] redisSet error:', data.error, 'key:', key);
   } catch(e) { console.error('[Redis] redisSet failed:', e); }
 }
 
 async function redisExpire(key, seconds) {
   try {
-    await fetch(
+    const res = await fetch(
       `${UPSTASH_URL}/expire/${encodeURIComponent(key)}/${seconds}`,
       { method: 'POST', headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
     );
+    const data = await res.json();
+    if (data.error) console.error('[Redis] redisExpire error:', data.error, 'key:', key);
   } catch(e) { console.error('[Redis] redisExpire failed:', e); }
 }
 
@@ -128,6 +126,7 @@ async function redisKeys(pattern) {
       { headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
     );
     const data = await res.json();
+    if (data.error) console.error('[Redis] redisKeys error:', data.error, 'pattern:', pattern);
     return data.result || [];
   } catch(e) { return []; }
 }
