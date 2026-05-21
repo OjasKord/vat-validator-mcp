@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.4';
+const VERSION = '2.0.5';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -97,7 +97,7 @@ async function redisSet(key, value) {
         body: JSON.stringify({ value: JSON.stringify(value) })
       }
     );
-  } catch(e) {}
+  } catch(e) { console.error('[Redis] redisSet failed:', e); }
 }
 
 async function redisExpire(key, seconds) {
@@ -106,17 +106,19 @@ async function redisExpire(key, seconds) {
       `${UPSTASH_URL}/expire/${encodeURIComponent(key)}/${seconds}`,
       { method: 'POST', headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
     );
-  } catch(e) {}
+  } catch(e) { console.error('[Redis] redisExpire failed:', e); }
 }
 
 async function appendSessionLog(ip, tool) {
-  const ipSafe = ip.replace(/:/g, '_').replace(/\s/g, '');
-  const dayKey = new Date().toISOString().slice(0, 10);
-  const key = `${REDIS_PREFIX}:session:${ipSafe}:${dayKey}`;
-  const existing = await redisGet(key) || [];
-  existing.push({ tool, timestamp: new Date().toISOString() });
-  await redisSet(key, existing);
-  await redisExpire(key, 86400);
+  try {
+    const ipSafe = ip.replace(/:/g, '_').replace(/\s/g, '');
+    const dayKey = new Date().toISOString().slice(0, 10);
+    const key = `${REDIS_PREFIX}:session:${ipSafe}:${dayKey}`;
+    const existing = await redisGet(key) || [];
+    existing.push({ tool, timestamp: new Date().toISOString() });
+    await redisSet(key, existing);
+    await redisExpire(key, 86400);
+  } catch(e) { console.error('[SessionLog] internal error:', e); }
 }
 
 async function redisKeys(pattern) {
@@ -880,12 +882,13 @@ const server = http.createServer(async (req, res) => {
             response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } };
           } else {
             const { name, arguments: args } = request.params;
-            const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+            const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+            const ip = rawIp.split(',')[0].trim();
             usageLog.push({ tool: name, tier: access.tier || access.plan || 'paid', time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
             if (usageLog.length > 1000) usageLog.shift();
             toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
             saveStats();
-            appendSessionLog(ip, name).catch(() => {});
+            appendSessionLog(ip, name).catch((e) => console.error('[SessionLog] appendSessionLog failed:', e));
             const result = await executeTool(name, args || {});
             if (access.plan === 'metered' && access.stripeCustomerId) {
               reportMeteredUsage(access.stripeCustomerId, 'vat_query').catch(() => {});
@@ -929,12 +932,13 @@ const server = http.createServer(async (req, res) => {
         } else if (request.method === 'prompts/list') { response = { jsonrpc: '2.0', id: request.id, result: { prompts: [] } };
         } else if (request.method === 'tools/call') {
           const { name, arguments: toolArgs } = request.params;
-          const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+          const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+          const ip = rawIp.split(',')[0].trim();
           usageLog.push({ tool: name, tier: req._tier || req._accessResult?.plan || 'paid', time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
           if (usageLog.length > 1000) usageLog.shift();
           toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
           saveStats();
-          appendSessionLog(ip, name).catch(() => {});
+          appendSessionLog(ip, name).catch((e) => console.error('[SessionLog] appendSessionLog failed:', e));
           const result = await executeTool(name, toolArgs || {});
           if (req._accessWarning) result._notice = req._accessWarning;
 
@@ -1061,6 +1065,10 @@ function setupStdio() {
 }
 
 setupStdio();
+
+if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
+  console.error('[Redis] WARNING: UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN not set — session logging will fail silently');
+}
 
 server.listen(PORT, async () => {
   loadStats();

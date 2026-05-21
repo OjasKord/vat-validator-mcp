@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.5 — 2026-05-21
+
+fix: session log Redis errors now visible, IP extraction takes first forwarded IP only, startup warning if Upstash env vars missing
+
 ## v2.0.4 — 2026-05-11
 
 feat: session co-occurrence logging to Redis — tracks tool call sequences per IP per day
