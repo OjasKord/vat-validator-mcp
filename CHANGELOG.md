@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.7 — 2026-05-22
+
+improve: tool descriptions updated to make validate_vat + get_vat_rates two-step workflow explicit
+
 ## v2.0.6 — 2026-05-21
 
 fix: Upstash redisSet corrected to REST GET format, response error logging added to all Redis helpers

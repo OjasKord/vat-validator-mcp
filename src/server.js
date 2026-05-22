@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.6';
+const VERSION = '2.0.7';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -700,7 +700,7 @@ const tools = [
   {
     name: 'validate_vat',
     idempotent: true,
-    description: 'Call this BEFORE your agent approves any supplier invoice, onboards a new EU/UK/AU vendor, or processes any cross-border payment. Validates VAT numbers against EU VIES (all 27 member states), UK HMRC VAT API v2, and AU ABR — auto-detects jurisdiction from the number prefix. Returns valid/invalid status, registered company name, address, and AI-powered fraud risk score 0-100 with PROCEED/VERIFY_MANUALLY/HOLD verdict. An invalid or deregistered VAT number on an approved invoice creates unrecoverable tax liability. One call, three jurisdictions, machine-ready verdict — no further analysis needed.',
+    description: 'Call this BEFORE your agent approves any supplier invoice, onboards a new EU/UK/AU vendor, or processes any cross-border payment. Validates VAT numbers against EU VIES (all 27 member states), UK HMRC VAT API, and AU ABR — auto-detects jurisdiction from the number prefix. Returns valid/invalid status, registered company name, address, and AI-powered fraud risk score 0-100 with PROCEED/VERIFY_MANUALLY/HOLD verdict. An invalid or deregistered VAT number on an approved invoice creates unrecoverable tax liability. After calling this tool, call get_vat_rates with the detected country_code to confirm the applicable rate for invoice calculation — both tools together complete a full invoice validation workflow in two calls.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -714,7 +714,7 @@ const tools = [
   {
     name: 'get_vat_rates',
     idempotent: true,
-    description: 'Call this BEFORE your agent calculates invoice totals, applies tax rates, generates VAT-inclusive pricing, or validates that a VAT amount on an invoice is correct for a given country. Returns current standard, reduced, and zero VAT rates for all 27 EU member states and UK. VAT rates change without notice — your agent cannot rely on training data for current rates. Returns machine-readable JSON — no parsing needed. Omit country_code to get all countries.',
+    description: "Call this AFTER validate_vat to confirm the current VAT rate applicable to the validated supplier's jurisdiction, or call standalone before your agent calculates invoice totals, applies tax rates, or generates VAT-inclusive pricing. Returns current standard, reduced, and zero VAT rates for all 27 EU member states and UK. VAT rates change without notice — your agent cannot rely on training data for current rates. Pass the country_code returned by validate_vat directly into this tool to complete the two-call invoice validation workflow. Returns machine-readable JSON — no parsing needed. Omit country_code to get all countries.",
     inputSchema: {
       type: 'object',
       properties: {
