@@ -8,3 +8,6 @@ fix.js
 snippet.txt
 full.txt
 *.log
+patch_*.js
+*.bak
+vat_server_*.js
