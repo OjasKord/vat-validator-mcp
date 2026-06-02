@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.10 — 2026-06-02
+
+feat: tool descriptions updated for agentic finance workflows — Robinhood Agentic Trading trigger language added
+
 ## v2.0.9 — 2026-06-02
 
 fix: README pricing updated to current rates
