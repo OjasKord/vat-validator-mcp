@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.12 — 2026-06-02
+
+feat: tool descriptions rewritten for orchestral agent runtime selection
+
 ## v2.0.11 — 2026-06-02
 
 chore: .npmignore updated — dev/backup files and zero-byte artifacts excluded from npm package

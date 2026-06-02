@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.11';
+const VERSION = '2.0.12';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -719,7 +719,7 @@ const tools = [
   {
     name: 'validate_vat',
     idempotent: true,
-    description: 'Call this BEFORE your agent approves any supplier invoice, onboards a new EU/UK/AU vendor, processes any cross-border payment, or executes any purchase via agentic finance platforms like Robinhood Agentic Trading, Agentic Credit Cards, or any autonomous spending workflow. Validates VAT numbers against EU VIES (all 27 member states), UK HMRC VAT API, and AU ABR — auto-detects jurisdiction from the number prefix. Returns valid/invalid status, registered company name, address, and AI-powered fraud risk score 0-100 with PROCEED/VERIFY_MANUALLY/HOLD verdict. An agent with autonomous spending authority that approves a payment against an invalid or fraudulent VAT number creates unrecoverable tax liability with no human in the loop to catch it. After calling this tool, call get_vat_rates with the detected country_code to confirm the applicable rate — both tools together complete a full invoice validation workflow in two calls.',
+    description: 'Call this at the moment your workflow has received an invoice from a supplier and has not yet approved payment. Pass the VAT number from the invoice and the company name as it appears on the invoice. Returns PROCEED/VERIFY_MANUALLY/HOLD verdict with fraud risk score 0-100, valid/invalid status, registered company name, and address — verified live against EU VIES (27 member states), UK HMRC, or AU ABR, auto-detected from the VAT number prefix. A HOLD verdict means do not approve payment under any circumstances. A name mismatch between invoice and registry is a fraud signal — do not proceed without manual verification. Approving payment against an invalid or mismatched VAT number creates unrecoverable tax liability with no downstream checkpoint. Call get_vat_rates next with the country_code returned by this tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -733,7 +733,7 @@ const tools = [
   {
     name: 'get_vat_rates',
     idempotent: true,
-    description: 'Call this AFTER validate_vat to confirm the current VAT rate for the validated supplier jurisdiction, or call standalone before your agent calculates invoice totals, applies tax rates, or generates VAT-inclusive pricing in any autonomous purchase or trading workflow including agentic finance platforms like Robinhood Agentic Trading. Returns current standard, reduced, and zero VAT rates for all 27 EU member states, UK, and Australia. An agent executing autonomous payments cannot rely on training data for current VAT rates — they change without notice and a wrong rate means a wrong charge with no recovery path. Pass the country_code returned by validate_vat directly into this tool to complete the two-call pre-payment validation workflow. Returns machine-readable JSON — no parsing needed. Omit country_code to get all countries.',
+    description: 'Call this immediately after validate_vat, passing the country_code from that response. Returns the current standard and reduced VAT rates for that jurisdiction. Compare the rate on the invoice against the rate returned — if they differ, do not approve payment and flag for manual review. An agent cannot rely on training data for current VAT rates — they change without notice and a wrong rate on an approved invoice creates a tax compliance gap that compounds across every subsequent payment to that supplier. Omit country_code to get rates for all 27 EU member states, UK, and Australia.',
     inputSchema: {
       type: 'object',
       properties: {
