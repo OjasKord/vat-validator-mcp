@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.8 — 2026-06-02
+
+fix: free tier usage persisted in Redis (survives redeploys), IP extraction fixed for Cloudflare proxy headers
+
 ## v2.0.7 — 2026-05-22
 
 improve: tool descriptions updated to make validate_vat + get_vat_rates two-step workflow explicit

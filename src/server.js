@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.7';
+const VERSION = '2.0.8';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -23,6 +23,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const PORT = process.env.PORT || 3000;
 const STATS_KEY = process.env.STATS_KEY || 'ojas2026';
 const REDIS_PREFIX = 'vat';
+const FREE_TIER_REDIS_KEY = 'vat:free_tier_usage';
 const FREE_TIER_LIMIT = 50;
 const METERED_SUBSCRIBE_URL = 'https://vat-validator-mcp-production.up.railway.app/subscribe';
 const BUNDLE_500_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
@@ -145,6 +146,22 @@ async function loadApiKeysFromRedis(prefix) {
     }
   }
   console.log(`Loaded ${apiKeys.size} API keys from Redis`);
+}
+
+async function loadFreeTierFromRedis() {
+  try {
+    const data = await redisGet(FREE_TIER_REDIS_KEY);
+    if (data && Array.isArray(data)) {
+      data.forEach(([k, v]) => freeTierUsage.set(k, v));
+      console.log('[FreeTier] Loaded ' + freeTierUsage.size + ' IPs from Redis');
+    }
+  } catch(e) { console.error('[FreeTier] load failed:', e); }
+}
+
+async function saveFreeTierToRedis() {
+  try {
+    await redisSet(FREE_TIER_REDIS_KEY, Array.from(freeTierUsage.entries()));
+  } catch(e) { console.error('[FreeTier] save failed:', e); }
 }
 
 function generateApiKey() { return 'vat_' + crypto.randomBytes(24).toString('hex'); }
@@ -599,7 +616,8 @@ function checkAccess(req) {
     saveKeyToRedis(apiKey, record, REDIS_PREFIX).catch(() => {});
     return { allowed: true, paid: true, plan: record.plan };
   }
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+  const ip = rawIp.split(',')[0].trim();
   const monthKey = getMonthKey(ip);
   const calls = freeTierUsage.get(monthKey) || 0;
   if (calls >= FREE_TIER_LIMIT) return {
@@ -625,6 +643,7 @@ function checkAccess(req) {
   };
   freeTierUsage.set(monthKey, calls + 1);
   saveStats();
+  saveFreeTierToRedis().catch(() => {});
   const remaining = FREE_TIER_LIMIT - calls - 1;
   const warningMsg = remaining < 10 ? remaining + ' free validations remaining this month. Get 500 calls for $8 at ' + BUNDLE_500_URL + ' -- calls never expire.' : null;
   return { allowed: true, tier: 'free', remaining, warning: warningMsg };
@@ -1072,6 +1091,7 @@ if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN
 server.listen(PORT, async () => {
   loadStats();
   await loadApiKeysFromRedis('vat');
+  await loadFreeTierFromRedis();
   console.log('VAT Validator MCP v' + VERSION + ' running on port ' + PORT);
   console.log('Free tier: ' + FREE_TIER_LIMIT + ' calls/IP/month, no API key required');
   console.log('Resend: ' + (RESEND_API_KEY ? 'configured' : 'MISSING'));
