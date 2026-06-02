@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.11 — 2026-06-02
+
+chore: .npmignore updated — dev/backup files and zero-byte artifacts excluded from npm package
+
 ## v2.0.10 — 2026-06-02
 
 feat: tool descriptions updated for agentic finance workflows — Robinhood Agentic Trading trigger language added

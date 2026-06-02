@@ -8,3 +8,20 @@ full.txt
 *.md
 .gitignore
 *.log
+node_modules/
+package-lock.json
+
+# dev/backup files
+src/server.js.bak
+src/vat_server_v130_clean.js
+vat_server_v2_fixed.js
+patch_vat_v134.js
+privacy.html
+
+# zero-byte shell artifact files
+cd
+del
+git
+main
+node
+railway
