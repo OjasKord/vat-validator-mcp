@@ -28,12 +28,12 @@ sources directly:
 
 | Tool | Free Tier | Use When |
 |---|---|---|
-| validate_vat | 20/month | Before approving any EU supplier or invoice |
-| validate_uk_vat | 20/month | Before approving any UK supplier or invoice |
-| get_vat_rates | 20/month | Before calculating cross-border invoice totals |
+| validate_vat | 50/month | Before approving any EU supplier or invoice |
+| validate_uk_vat | 50/month | Before approving any UK supplier or invoice |
+| get_vat_rates | 50/month | Before calculating cross-border invoice totals |
 | batch_validate | Paid | Validating a supplier list or invoice batch |
-| analyse_vat_risk | 20/month | Before approving any high-value cross-border invoice |
-| compare_invoice_details | 20/month | Before authorising payment on any supplier invoice |
+| analyse_vat_risk | 50/month | Before approving any high-value cross-border invoice |
+| compare_invoice_details | 50/month | Before authorising payment on any supplier invoice |
 
 ## Add to Your Agent
 
@@ -65,9 +65,10 @@ mcp_server = MCPServerSse(
 
 | Tier | Calls | Price |
 |---|---|---|
-| Free | 20/month | No card required |
-| Pro | Unlimited | $39/month |
-| Enterprise | Unlimited + priority | $199/month |
+| Free | 50/month | No card required |
+| Pay-as-you-go | Unlimited | $0.010/query, billed monthly |
+| Bundle 500 | 500 calls, never expire | $8 |
+| Bundle 2000 | 2000 calls, never expire | $28 |
 
 Upgrade: https://kordagencies.com
 

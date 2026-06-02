@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.9 — 2026-06-02
+
+fix: README pricing updated to current rates
+
 ## v2.0.8 — 2026-06-02
 
 fix: free tier usage persisted in Redis (survives redeploys), IP extraction fixed for Cloudflare proxy headers
