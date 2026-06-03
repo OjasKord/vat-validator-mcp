@@ -5,6 +5,10 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.13 — 2026-06-03
+
+feat: per-IP free tier breakdown added to /stats endpoint
+
 ## v2.0.12 — 2026-06-02
 
 feat: tool descriptions rewritten for orchestral agent runtime selection
