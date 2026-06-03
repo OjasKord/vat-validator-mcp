@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.13';
+const VERSION = '2.0.14';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -160,7 +160,13 @@ async function loadFreeTierFromRedis() {
 
 async function saveFreeTierToRedis() {
   try {
-    await redisSet(FREE_TIER_REDIS_KEY, Array.from(freeTierUsage.entries()));
+    const existing = await redisGet(FREE_TIER_REDIS_KEY) || [];
+    const existingMap = new Map(existing);
+    for (const [key, value] of freeTierUsage.entries()) {
+      const existingCount = existingMap.get(key) || 0;
+      existingMap.set(key, Math.max(existingCount, value));
+    }
+    await redisSet(FREE_TIER_REDIS_KEY, Array.from(existingMap.entries()));
   } catch(e) { console.error('[FreeTier] save failed:', e); }
 }
 
