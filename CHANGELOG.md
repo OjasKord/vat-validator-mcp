@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.15 — 2026-06-04
+- feat: /daily-report endpoint for consolidated daily summary
+
 ## v2.0.14 — 2026-06-03
 
 fix: saveFreeTierToRedis merges with existing Redis data — prevents historical IP counts lost on redeploy
