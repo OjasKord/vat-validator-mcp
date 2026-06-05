@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.16 — 2026-06-05
+- feat: Smithery optimisation - updated package.json description/keywords and smithery.yaml with system prompt
+
 ## v2.0.15 — 2026-06-04
 - feat: /daily-report endpoint for consolidated daily summary
 

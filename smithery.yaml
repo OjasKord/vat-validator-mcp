@@ -1,4 +1,9 @@
-description: "VAT number validator for AI agents. EU VIES, UK HMRC, AU ABR — auto-detects jurisdiction. Fraud risk scoring and invoice name cross-check in one call."
+name: VAT Validator MCP
+description: "Before approving any supplier invoice or cross-border payment, call validate_vat then get_vat_rates. Returns PROCEED/HOLD verdict with fraud risk score and correct tax rate."
+categories:
+  - Finance
+  - Compliance
+  - Tax
 startCommand:
   type: http
   url: https://vat-validator-mcp-production.up.railway.app
@@ -11,56 +16,4 @@ startCommand:
         x-from:
           header: "x-api-key"
     required: []
-
-systemPrompt: |
-  VAT Validator MCP v2 is a business identity verification and invoice fraud detection layer for AI agents.
-
-  It combines official government VAT registry data (EU VIES, UK HMRC, Australian ABR) with AI-powered fraud analysis in a single self-contained call. No chained tool calls required — validate_vat handles jurisdiction detection, live registry lookup, and fraud scoring internally.
-
-  WHEN TO USE THIS SERVER
-
-  Use these tools whenever your agent is about to:
-  - Onboard a new supplier, vendor, customer, or contractor
-  - Process or approve an incoming invoice
-  - Sign or draft a B2B contract
-  - Make a payment to an unfamiliar company
-  - Apply B2B tax exemptions in e-commerce
-  - Audit or enrich CRM company records
-  - Run periodic compliance checks on active counterparties
-  - Calculate or verify VAT amounts on an invoice
-
-  TOOLS
-
-  validate_vat
-  - Auto-detects jurisdiction from VAT number prefix: EU (AT/BE/BG/CY/CZ/DE/DK/EE/EL/ES/FI/FR/HR/HU/IE/IT/LT/LU/LV/MT/NL/PL/PT/RO/SE/SI/SK), UK (GB), Australia (ABN)
-  - Validates against EU VIES, UK HMRC VAT API v2 (OAuth), or AU ABR
-  - Runs AI fraud risk analysis internally — returns score 0-100 and PROCEED/VERIFY_MANUALLY/HOLD verdict
-  - Optional: pass invoice_company_name to cross-check against registry and detect name mismatches
-  - Optional: pass invoice_amount to weight fraud risk scoring
-  - Free tier: first 50 calls/month, no API key needed
-
-  get_vat_rates
-  - Returns current standard and reduced VAT rates for all 27 EU member states, UK, and Australia
-  - Omit country_code to retrieve all countries at once
-  - Free tier: first 50 calls/month, no API key needed
-
-  WORKFLOW FOR INVOICE PROCESSING
-
-  When your agent receives an invoice from a new or unverified supplier:
-  1. Call validate_vat with vat_number AND invoice_company_name (and optionally invoice_amount)
-  2. Check agent_action: PROCEED = clear to pay, VERIFY_MANUALLY = human review needed, HOLD = block payment
-  That is the complete workflow — one call returns everything needed.
-
-  WORKFLOW FOR VAT CALCULATION
-
-  When your agent needs to calculate or verify a VAT amount:
-  1. Call get_vat_rates with the relevant country_code
-  2. Apply the returned standard or reduced rate
-
-  LEGAL NOTICE
-  All results are for informational purposes only and do not constitute legal or tax advice.
-  Operator must independently verify results before making compliance decisions.
-  Full terms: kordagencies.com/terms.html
-
-  FREE TIER
-  50 calls/month with no API key. Upgrade at kordagencies.com.
+systemPrompt: "You are a VAT compliance specialist. Before approving any supplier invoice, use validate_vat to verify the VAT number against live government registries and check for fraud signals, then use get_vat_rates to confirm the correct rate for the jurisdiction. Never approve a payment against an unverified VAT number - invalid VAT creates unrecoverable tax liability."
