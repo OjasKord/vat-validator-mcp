@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.18 — 2026-06-11
+- feat: per-tool kill switch + per-minute rate limiting on AI tools
+
 ## v2.0.17 — 2026-06-08
 - fix: BEFORE trigger language, consequence-first limit error
 
