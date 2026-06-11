@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.19 — 2026-06-11
+- fix: bump version past existing npm publish (2.0.18 already on registry)
+
 ## v2.0.18 — 2026-06-11
 - feat: per-tool kill switch + per-minute rate limiting on AI tools
 
