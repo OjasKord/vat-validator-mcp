@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.19';
+const VERSION = '2.0.20';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -884,7 +884,7 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === '/.well-known/mcp/server-card.json' && req.method === 'GET') {
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ name: 'vat-validator-mcp', title: 'VAT Validator MCP', version: VERSION, description: 'VAT number validator for AI agents. EU VIES, UK HMRC, AU ABR — auto-detects jurisdiction. Fraud risk scoring and invoice name cross-check in one call.', tools: tools.map(t => t.name), transport: 'streamable-http', homepage: 'https://kordagencies.com', token_footprint_min: 100, token_footprint_max: 600, token_footprint_avg: 200, idempotent_tools: ['validate_vat', 'get_vat_rates'], circuit_breaker: false, health_endpoint: '/health', ready_endpoint: '/ready' }));
+    res.end(JSON.stringify({ serverInfo: { name: 'vat-validator-mcp', version: VERSION }, tools: tools.map(t => ({ name: t.name, description: t.description.slice(0, 150) })), resources: [], prompts: [] }));
     return;
   }
 
