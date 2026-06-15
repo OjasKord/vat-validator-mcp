@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.21';
+const VERSION = '2.0.22';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -566,7 +566,7 @@ Return ONLY valid JSON with no preamble or markdown:
       agentAction = 'PROCEED';
     }
 
-    return {
+    const vatResult = {
       agent_action: agentAction,
       valid,
       vat_number,
@@ -582,8 +582,18 @@ Return ONLY valid JSON with no preamble or markdown:
       source_url: sourceUrl,
       checked_at: checkedAt,
       _disclaimer: LEGAL_DISCLAIMER,
-      ai_notice: 'AI-powered fraud analysis — NOT a simple database lookup'
+      ai_notice: 'AI-powered fraud analysis -- NOT a simple database lookup'
     };
+    if (agentAction === 'VERIFY_MANUALLY') {
+      vatResult.hold_reason = nameMatch === 'MISMATCH'
+        ? 'Invoice company name does not match registered VAT holder name in ' + jurisdiction + ' registry'
+        : (fraudSignals[0] || 'VAT number flagged for elevated fraud risk -- manual verification required');
+      vatResult.retry_after = null;
+      vatResult.escalation_path = nameMatch === 'MISMATCH'
+        ? 'Contact supplier to confirm correct VAT registration and verify independently with ' + jurisdiction + ' tax authority before approving payment'
+        : 'Verify VAT registration status directly with ' + jurisdiction + ' tax authority before approving payment';
+    }
+    return vatResult;
   }
 
   if (name === 'get_vat_rates') {
