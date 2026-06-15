@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.20';
+const VERSION = '2.0.21';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -741,7 +741,7 @@ const tools = [
   {
     name: 'validate_vat',
     idempotent: true,
-    description: 'Call this BEFORE approving any supplier invoice or cross-border payment — at the moment a VAT number is present on an invoice and payment has not yet been authorised. Returns PROCEED/VERIFY_MANUALLY/HOLD verdict with fraud risk score 0-100, name match check between invoice and registry, and country_code for the next call. A HOLD verdict means do not approve payment. A name mismatch is a fraud signal — stop and verify manually. Approving payment against an invalid or mismatched VAT number creates unrecoverable tax liability. Call get_vat_rates next with the country_code from this response.',
+    description: 'Call this BEFORE submitting any B2B payment via an agentic payment rail -- at the moment a VAT number appears on a supplier invoice and Stripe MPP, Alipay AI Pay, or Shopify UCP has not yet been called. Validates against EU VIES (ec.europa.eu), UK HMRC (api.service.hmrc.gov.uk), and AU ABR (abr.business.gov.au) live registries. Returns PROCEED / VERIFY_MANUALLY / HOLD verdict with fraud risk score 0-100 and name-match check. A settled B2B payment against an invalid or mismatched VAT number creates unrecoverable tax liability -- no agentic rail reverses a cleared cross-border transfer. Pass the country_code from this response to get_vat_rates. One call, machine-ready verdict, no further analysis needed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -755,7 +755,7 @@ const tools = [
   {
     name: 'get_vat_rates',
     idempotent: true,
-    description: 'Call this BEFORE calculating any invoice total, applying any tax rate, or approving any VAT amount — or immediately after validate_vat passing the country_code from that response. Returns current standard and reduced VAT rates for the jurisdiction. An agent cannot rely on training data for current VAT rates — they change without notice and a wrong rate on an approved invoice creates a compounding tax compliance gap. If the rate on the invoice differs from the rate returned, do not approve payment.',
+    description: 'Call this BEFORE calculating any invoice total or approving any VAT amount -- or immediately after validate_vat passing the country_code from that response. Returns current standard and reduced VAT rates for the jurisdiction. An agentic payment workflow that approves an invoice with an incorrect VAT rate creates a compounding compliance gap across every settled payment in that run -- VAT rates change without notice and cannot be sourced from training data. If the rate on the invoice differs from the rate returned here, do not approve payment.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -915,7 +915,7 @@ const server = http.createServer(async (req, res) => {
         const request = JSON.parse(body);
         let response;
         if (request.method === 'initialize') {
-          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'VAT Validator MCP v2. validate_vat auto-detects EU/UK/AU jurisdiction, validates against live government registries, and returns AI-powered fraud risk scoring — all in one call. No chained inputs, no prior state required.' } } };
+          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES, UK HMRC, and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
         } else if (request.method === 'notifications/initialized') {
           res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') {
@@ -1045,7 +1045,7 @@ const server = http.createServer(async (req, res) => {
           req._tier = access.tier;
           req._accessResult = access;
         }
-        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'VAT Validator MCP v2. validate_vat auto-detects EU/UK/AU jurisdiction, validates against live government registries, and returns AI-powered fraud risk scoring — all in one call. No chained inputs, no prior state required.' } } };
+        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES, UK HMRC, and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
         } else if (request.method === 'notifications/initialized') { res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') { response = { jsonrpc: '2.0', id: request.id, result: { tools } };
         } else if (request.method === 'resources/list') { response = { jsonrpc: '2.0', id: request.id, result: { resources: [] } };
@@ -1159,7 +1159,7 @@ function setupStdio() {
       try { req = JSON.parse(line); } catch(e) { return; }
       let response;
       if (req.method === 'initialize') {
-        response = { jsonrpc: '2.0', id: req.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'VAT Validator MCP v2. validate_vat auto-detects EU/UK/AU jurisdiction, validates against live government registries, and returns AI-powered fraud risk scoring — all in one call. No chained inputs, no prior state required.' } } };
+        response = { jsonrpc: '2.0', id: req.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES, UK HMRC, and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
       } else if (req.method === 'notifications/initialized') {
         return;
       } else if (req.method === 'tools/list') {

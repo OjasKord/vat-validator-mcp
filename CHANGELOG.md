@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.21 — 2026-06-15
+- feat: reposition tool descriptions for agentic payment rail discovery -- Stripe MPP, Alipay AI Pay, Shopify UCP trigger vocabulary across validate_vat, get_vat_rates, and initialize description
+
 ## v2.0.20 — 2026-06-11
 - feat: add /.well-known/mcp/server-card.json static metadata endpoint
 
