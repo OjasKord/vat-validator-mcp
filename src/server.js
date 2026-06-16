@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.22';
+const VERSION = '2.0.23';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -751,7 +751,7 @@ const tools = [
   {
     name: 'validate_vat',
     idempotent: true,
-    description: 'Call this BEFORE submitting any B2B payment via an agentic payment rail -- at the moment a VAT number appears on a supplier invoice and Stripe MPP, Alipay AI Pay, or Shopify UCP has not yet been called. Validates against EU VIES (ec.europa.eu), UK HMRC (api.service.hmrc.gov.uk), and AU ABR (abr.business.gov.au) live registries. Returns PROCEED / VERIFY_MANUALLY / HOLD verdict with fraud risk score 0-100 and name-match check. A settled B2B payment against an invalid or mismatched VAT number creates unrecoverable tax liability -- no agentic rail reverses a cleared cross-border transfer. Pass the country_code from this response to get_vat_rates. One call, machine-ready verdict, no further analysis needed.',
+    description: 'Validates a VAT number against live government registries. Call this BEFORE submitting any B2B payment via an agentic payment rail -- at the moment a VAT number appears on a supplier invoice and Stripe MPP, Alipay AI Pay, or Shopify UCP has not yet been called. Use this when a supplier invoice carries a VAT number and your agent must confirm it is registered to the correct entity before approving payment. Validates against EU VIES (ec.europa.eu), UK HMRC (api.service.hmrc.gov.uk), and AU ABR (abr.business.gov.au) live registries. Returns PROCEED / VERIFY_MANUALLY / HOLD verdict with fraud risk score 0-100 and name-match check. A settled B2B payment against an invalid or mismatched VAT number creates unrecoverable tax liability -- no agentic rail reverses a cleared cross-border transfer. Pass the country_code from this response to get_vat_rates. One call, machine-ready verdict, no further analysis needed.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -765,7 +765,7 @@ const tools = [
   {
     name: 'get_vat_rates',
     idempotent: true,
-    description: 'Call this BEFORE calculating any invoice total or approving any VAT amount -- or immediately after validate_vat passing the country_code from that response. Returns current standard and reduced VAT rates for the jurisdiction. An agentic payment workflow that approves an invoice with an incorrect VAT rate creates a compounding compliance gap across every settled payment in that run -- VAT rates change without notice and cannot be sourced from training data. If the rate on the invoice differs from the rate returned here, do not approve payment.',
+    description: 'Retrieves current VAT rates for a jurisdiction. Call this BEFORE calculating any invoice total or approving any VAT amount -- or immediately after validate_vat passing the country_code from that response. Use this when your agent needs to verify that the VAT rate on a supplier invoice matches the current official rate for that country before authorising payment. Returns current standard and reduced VAT rates for the jurisdiction. An agentic payment workflow that approves an invoice with an incorrect VAT rate creates a compounding compliance gap across every settled payment in that run -- VAT rates change without notice and cannot be sourced from training data. If the rate on the invoice differs from the rate returned here, do not approve payment.',
     inputSchema: {
       type: 'object',
       properties: {

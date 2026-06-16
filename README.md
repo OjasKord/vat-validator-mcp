@@ -1,5 +1,7 @@
 # VAT Validator MCP
 
+[![ToolRank](https://toolrank.dev/badge/dominant.svg)](https://toolrank.dev/ranking)
+
 **AI-powered VAT fraud detection and live VAT number validation
 for AI agents.**
 

@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.23 — 2026-06-16
+- feat: ATO optimisation — purpose verb, usage context, required fields, ToolRank badge
+
 ## v2.0.22 — 2026-06-15
 - feat: add hold_reason, retry_after, escalation_path to VERIFY_MANUALLY responses in validate_vat
 
