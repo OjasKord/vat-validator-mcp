@@ -3,7 +3,7 @@
   "name": "io.github.OjasKord/vat-validator-mcp",
   "title": "VAT Validator MCP",
   "description": "Validate EU, UK, AU VAT numbers for AI agents. EU ViDA e-invoicing compliance.",
-  "version": "2.0.4",
+  "version": "2.0.23",
   "websiteUrl": "https://kordagencies.com",
   "repository": {
     "url": "https://github.com/OjasKord/vat-validator-mcp",
@@ -13,14 +13,36 @@
     {
       "registryType": "npm",
       "identifier": "vat-validator-mcp",
-      "version": "2.0.4",
-      "transport": { "type": "stdio" },
+      "version": "2.0.23",
+      "transport": {
+        "type": "stdio"
+      },
       "environmentVariables": [
-        { "name": "ANTHROPIC_API_KEY", "description": "Anthropic API key for AI-powered fraud risk analysis", "isRequired": true, "isSecret": true },
-        { "name": "HMRC_CLIENT_ID", "description": "HMRC Developer Hub client ID for UK VAT validation", "isRequired": false, "isSecret": true },
-        { "name": "HMRC_CLIENT_SECRET", "description": "HMRC Developer Hub client secret for UK VAT validation", "isRequired": false, "isSecret": true }
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "description": "Anthropic API key for AI-powered fraud risk analysis",
+          "isRequired": true,
+          "isSecret": true
+        },
+        {
+          "name": "HMRC_CLIENT_ID",
+          "description": "HMRC Developer Hub client ID for UK VAT validation",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "HMRC_CLIENT_SECRET",
+          "description": "HMRC Developer Hub client secret for UK VAT validation",
+          "isRequired": false,
+          "isSecret": true
+        }
       ]
     }
   ],
-  "remotes": [{ "type": "streamable-http", "url": "https://vat-validator-mcp-production.up.railway.app" }]
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://vat-validator-mcp-production.up.railway.app"
+    }
+  ]
 }
