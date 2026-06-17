@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.23';
+const VERSION = '2.0.24';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -28,6 +28,7 @@ const FREE_TIER_LIMIT = 50;
 const METERED_SUBSCRIBE_URL = 'https://vat-validator-mcp-production.up.railway.app/subscribe';
 const BUNDLE_500_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
 const BUNDLE_2000_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
+const ALLOWED_PAYMENT_LINK_IDS = ['plink_1TQz5UD6WvRe6sn3I1GPShmC', 'plink_1TQz6rD6WvRe6sn3mqxD0Gy8'];
 
 const freeTierUsage = new Map();
 const usageLog = [];
@@ -713,6 +714,11 @@ async function handleStripeWebhook(body, sig) {
     const event = JSON.parse(body);
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
+      const paymentLinkId = session.payment_link;
+      if (paymentLinkId && !ALLOWED_PAYMENT_LINK_IDS.includes(paymentLinkId)) {
+        console.log('[vat] Webhook received but payment link ' + paymentLinkId + ' not for this server — ignoring.');
+        return { received: true, ignored: true };
+      }
       const plan = getPlanFromProduct(session.metadata?.product_name);
       const apiKey = generateApiKey();
       const limit = plan === 'metered' ? null : plan === 'bundle_2000' ? 2000 : 500;

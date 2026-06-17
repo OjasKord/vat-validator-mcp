@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.24 — 2026-06-17
+- fix: Stripe webhook now validates payment_link ID — ignores events not belonging to this server
+
 ## v2.0.23 — 2026-06-16
 - feat: ATO optimisation — purpose verb, usage context, required fields, ToolRank badge
 
