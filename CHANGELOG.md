@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.25 — 2026-06-17
+- fix: sendEmail now logs Resend HTTP errors; skip email send when customer email is unknown
+
 ## v2.0.24 — 2026-06-17
 - fix: Stripe webhook now validates payment_link ID — ignores events not belonging to this server
 

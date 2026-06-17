@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.24';
+const VERSION = '2.0.25';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -227,8 +227,11 @@ async function sendEmail(to, subject, html) {
     const req = https.request({
       hostname: 'api.resend.com', path: '/emails', method: 'POST',
       headers: { 'Authorization': 'Bearer ' + RESEND_API_KEY, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-    }, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => resolve({ status: res.statusCode, body: d })); });
-    req.on('error', e => resolve({ error: e.message }));
+    }, res => { let d = ''; res.on('data', c => d += c); res.on('end', () => {
+      if (res.statusCode < 200 || res.statusCode >= 300) console.error('[Resend] Email failed: HTTP ' + res.statusCode + ' ' + d);
+      resolve({ status: res.statusCode, body: d });
+    }); });
+    req.on('error', e => { console.error('[Resend] Email network error:', e.message); resolve({ error: e.message }); });
     req.write(body); req.end();
   });
 }
@@ -733,7 +736,11 @@ async function handleStripeWebhook(body, sig) {
       };
       apiKeys.set(apiKey, record);
       await saveKeyToRedis(apiKey, record, REDIS_PREFIX);
-      await sendApiKeyEmail(record.email, apiKey, plan);
+      if (record.email && record.email !== 'unknown') {
+        await sendApiKeyEmail(record.email, apiKey, plan);
+      } else {
+        console.error('[vat] No customer email in webhook — skipping email send');
+      }
       console.log('[vat] API key created for ' + record.email + ' (' + plan + ')');
       return { success: true, email: record.email, plan };
     }
