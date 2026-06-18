@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.26 — 2026-06-18
+- feat: revoke API key on Stripe refund
+
 ## v2.0.25 — 2026-06-17
 - fix: sendEmail now logs Resend HTTP errors; skip email send when customer email is unknown
 

@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.25';
+const VERSION = '2.0.26';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -123,6 +123,17 @@ async function redisExpire(key, seconds) {
     const data = await res.json();
     if (data.error) console.error('[Redis] redisExpire error:', data.error, 'key:', key);
   } catch(e) { console.error('[Redis] redisExpire failed:', e); }
+}
+
+async function redisDelete(key) {
+  try {
+    const res = await fetch(
+      `${UPSTASH_URL}/del/${encodeURIComponent(key)}`,
+      { method: 'POST', headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` } }
+    );
+    const data = await res.json();
+    if (data.error) console.error('[Redis] redisDelete error:', data.error, 'key:', key);
+  } catch(e) { console.error('[Redis] redisDelete failed:', e); }
 }
 
 async function appendSessionLog(ip, tool) {
@@ -755,6 +766,40 @@ async function handleStripeWebhook(body, sig) {
         }
       }
       return { received: true, type: event.type };
+    }
+    if (event.type === 'charge.refunded') {
+      if (!process.env.STRIPE_SECRET_KEY) {
+        console.error('[vat] STRIPE_SECRET_KEY not set — cannot revoke key on refund');
+        return { received: true, ignored: true };
+      }
+      const paymentIntentId = event.data.object.payment_intent;
+      if (!paymentIntentId) {
+        console.log('[vat] charge.refunded missing payment_intent — ignoring.');
+        return { received: true, ignored: true };
+      }
+      try {
+        const sessions = await stripe.checkout.sessions.list({ payment_intent: paymentIntentId, limit: 1 });
+        const email = sessions.data[0]?.customer_details?.email;
+        if (!email) {
+          console.log('[vat] No checkout session/email found for refunded payment_intent ' + paymentIntentId);
+          return { received: true, ignored: true };
+        }
+        let revokedKey = null;
+        for (const [key, record] of apiKeys.entries()) {
+          if (record.email === email) { revokedKey = key; break; }
+        }
+        if (!revokedKey) {
+          console.log('[vat] No API key found for ' + email + ' — refund received, nothing to revoke');
+          return { received: true, ignored: true };
+        }
+        apiKeys.delete(revokedKey);
+        await redisDelete(`${REDIS_PREFIX}:key:${revokedKey}`);
+        console.log('[Webhook] API key revoked for ' + email + ' — refund received');
+        return { received: true, revoked: true };
+      } catch(e) {
+        console.error('[vat] charge.refunded handling error:', e.message);
+        return { received: true, ignored: true };
+      }
     }
     return { received: true, type: event.type };
   } catch(e) { console.error('[vat] Webhook error:', e.message); return { error: e.message, status: 400 }; }
