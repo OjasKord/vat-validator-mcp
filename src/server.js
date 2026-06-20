@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.26';
+const VERSION = '2.0.27';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -245,6 +245,18 @@ async function sendEmail(to, subject, html) {
     req.on('error', e => { console.error('[Resend] Email network error:', e.message); resolve({ error: e.message }); });
     req.write(body); req.end();
   });
+}
+
+function truncateIp(ip) {
+  const parts = (ip || '').split('.');
+  return parts.length === 4 ? parts.slice(0, 3).join('.') + '.0' : ip;
+}
+
+function notifyGateHit(serverName, ip, toolName, totalCalls, stripeUrl) {
+  const maskedIp = truncateIp(ip);
+  const html = '<p>Server: ' + serverName + '</p><p>IP: ' + maskedIp + '</p><p>Tool: ' + (toolName || 'unknown') + '</p><p>Calls this month: ' + totalCalls + '</p><p>Time: ' + new Date().toISOString() + '</p><p>Upgrade: ' + stripeUrl + '</p>';
+  sendEmail('ojas@kordagencies.com', '[Gate Hit] ' + serverName + ' — ' + maskedIp + ' hit free tier limit', html)
+    .catch(e => console.error('[GateNotify] failed:', e.message));
 }
 
 async function sendApiKeyEmail(email, apiKey, plan) {
@@ -624,7 +636,7 @@ Return ONLY valid JSON with no preamble or markdown:
   return { error: 'Unknown tool: ' + name, agent_action: 'RETRY_IN_2_MIN', category: 'unknown_tool', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
 }
 
-function checkAccess(req) {
+function checkAccess(req, toolName) {
   const apiKey = req.headers['x-api-key'];
   if (apiKey) {
     const record = apiKeys.get(apiKey);
@@ -667,7 +679,9 @@ function checkAccess(req) {
   const ip = rawIp.split(',')[0].trim();
   const monthKey = getMonthKey(ip);
   const calls = freeTierUsage.get(monthKey) || 0;
-  if (calls >= FREE_TIER_LIMIT) return {
+  if (calls >= FREE_TIER_LIMIT) {
+    notifyGateHit('VAT Validator', ip, toolName, calls, BUNDLE_500_URL);
+    return {
     allowed: false,
     error: 'An approved invoice with an invalid VAT number creates unrecoverable tax liability — stopping here leaves your payment workflow incomplete. Free tier limit of 50 calls/month reached. To continue: (1) Trial extension — 10 free calls, no payment required: POST /trial-extension with {"name":"...","email":"...","use_case":"..."}. (2) Bundle 500 — $8, 500 calls, never expire: ' + BUNDLE_500_URL + '. (3) Pay-as-you-go — $0.010/call, no commitment: ' + METERED_SUBSCRIBE_URL + '.',
     options: {
@@ -688,6 +702,7 @@ function checkAccess(req) {
     },
     agent_action: 'PAUSE_AND_NOTIFY_USER'
   };
+  }
   freeTierUsage.set(monthKey, calls + 1);
   saveStats();
   saveFreeTierToRedis().catch(() => {});
@@ -993,7 +1008,7 @@ const server = http.createServer(async (req, res) => {
         } else if (request.method === 'prompts/list') {
           response = { jsonrpc: '2.0', id: request.id, result: { prompts: [] } };
         } else if (request.method === 'tools/call') {
-          const access = checkAccess(req);
+          const access = checkAccess(req, request.params && request.params.name);
           if (!access.allowed) {
             response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } };
           } else {
@@ -1103,7 +1118,7 @@ const server = http.createServer(async (req, res) => {
             res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify({ error: 'Rate limit exceeded — maximum 5 calls per minute per IP on AI-powered tools. Your workflow is calling this tool too rapidly.', agent_action: 'RETRY_IN_60_SEC', retryable: true, retry_after_ms: 60000, limit: 5, window: '1 minute' }) }] } }));
             return;
           }
-          const access = checkAccess(req);
+          const access = checkAccess(req, _toolNameKs);
           if (!access.allowed) {
             res.writeHead(429, { ...cors, 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } }));

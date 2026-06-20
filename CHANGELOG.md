@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.27 — 2026-06-20
+- feat: email notification on free tier gate hit
+
 ## v2.0.26 — 2026-06-18
 - feat: revoke API key on Stripe refund
 
