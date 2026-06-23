@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.27';
+const VERSION = '2.0.28';
 
 // Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
 const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
@@ -1120,7 +1120,7 @@ const server = http.createServer(async (req, res) => {
           }
           const access = checkAccess(req, _toolNameKs);
           if (!access.allowed) {
-            res.writeHead(429, { ...cors, 'Content-Type': 'application/json' });
+            res.writeHead(402, { ...cors, 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } }));
             return;
           }

@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.28 — 2026-06-23
+- fix: gate returns HTTP 402 (x402 standard for non-transient quota)
+
 ## v2.0.27 — 2026-06-20
 - feat: email notification on free tier gate hit
 

@@ -1,4 +1,5 @@
 name: VAT Validator MCP
+agentRole: "VAT Compliance Specialist — equip before approving any supplier invoice or cross-border payment to verify VAT number and tax rate"
 description: "Before approving any supplier invoice or cross-border payment, call validate_vat then get_vat_rates. Returns PROCEED/HOLD verdict with fraud risk score and correct tax rate. 2 focused tools. Compact schema. Minimal agent context overhead."
 categories:
   - Finance
