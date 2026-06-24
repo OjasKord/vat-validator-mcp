@@ -12,6 +12,7 @@ Format: version number, date, what changed.
 - feat: outputSchema added to both tools (additive, response format unchanged)
 - fix: glama.json and README listed 4 phantom tools (validate_uk_vat, batch_validate, analyse_vat_risk, compare_invoice_details) removed in the v2.0.x consolidation to 2 tools but never cleaned up in discovery metadata -- now matches the actual 2 live tools
 - chore: removed stray cached-response debug file from repo
+- known issue (pre-existing, not introduced this release): HMRC_SANDBOX=true is still set on Railway -- real UK VAT numbers (GB-prefixed) return false NOT_FOUND because only sandbox test VRNs validate against sandbox credentials. EU VIES and AU ABR validation are unaffected. Fix requires real HMRC production credentials, which is an external approval process already in motion (chased with HMRC 2026-06-02, next chase was due 2026-06-16, now overdue). Not fixable in code.
 
 ## v2.0.28 — 2026-06-23
 - fix: gate returns HTTP 402 (x402 standard for non-transient quota)
