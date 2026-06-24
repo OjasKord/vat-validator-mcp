@@ -15,27 +15,11 @@
   "tools": [
     {
       "name": "validate_vat",
-      "description": "Validates EU VAT numbers against EU VIES (all 27 member states) and AU ABR in real time. Returns valid/invalid, registered company name, address."
-    },
-    {
-      "name": "validate_uk_vat",
-      "description": "Validates UK VAT numbers against HMRC VAT API v2 via OAuth2. Returns valid/invalid, registered business name, address."
+      "description": "Validates a VAT number against EU VIES, UK HMRC, or AU ABR (auto-detected from the number's prefix) and runs AI fraud risk analysis in the same call. Returns PROCEED/VERIFY_MANUALLY/HOLD agent_action, CLEAR/REVIEW/BLOCK recommendation, fraud risk score 0-100, registered name, address."
     },
     {
       "name": "get_vat_rates",
-      "description": "Returns current standard, reduced, and zero VAT rates for all 27 EU member states and UK."
-    },
-    {
-      "name": "batch_validate",
-      "description": "Validates multiple VAT numbers against EU VIES and HMRC in one call. Returns per-number verdicts in structured JSON."
-    },
-    {
-      "name": "analyse_vat_risk",
-      "description": "AI-powered VAT fraud risk scoring. Detects missing trader fraud, carousel fraud, deregistered entity re-use. Returns CLEAR/REVIEW/BLOCK recommendation, risk score 0-100, fraud signals, agent_action (PROCEED/VERIFY_MANUALLY/HOLD)."
-    },
-    {
-      "name": "compare_invoice_details",
-      "description": "Cross-checks invoice VAT details against live VIES and HMRC registry data. Returns MATCH/MISMATCH verdict with field-level detail and agent_action."
+      "description": "Returns current standard and reduced VAT rates for all 27 EU member states, UK, and AU."
     }
   ],
   "links": {

@@ -30,12 +30,8 @@ sources directly:
 
 | Tool | Free Tier | Use When |
 |---|---|---|
-| validate_vat | 50/month | Before approving any EU supplier or invoice |
-| validate_uk_vat | 50/month | Before approving any UK supplier or invoice |
+| validate_vat | 50/month | Before approving any EU, UK, or AU supplier invoice -- auto-detects jurisdiction, validates, and runs AI fraud analysis in one call |
 | get_vat_rates | 50/month | Before calculating cross-border invoice totals |
-| batch_validate | Paid | Validating a supplier list or invoice batch |
-| analyse_vat_risk | 50/month | Before approving any high-value cross-border invoice |
-| compare_invoice_details | 50/month | Before authorising payment on any supplier invoice |
 
 ## Add to Your Agent
 
