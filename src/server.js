@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.29';
+const VERSION = '2.0.30';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -32,6 +32,8 @@ const STATS_KEY = process.env.STATS_KEY || 'ojas2026';
 const REDIS_PREFIX = 'vat';
 const FREE_TIER_REDIS_KEY = 'vat:free_tier_usage';
 const FREE_TIER_LIMIT = 50;
+// Caching/staleness policy per tool, in seconds.
+const VERDICT_TTL = { validate_vat: 2592000, get_vat_rates: 604800 };
 const METERED_SUBSCRIBE_URL = 'https://vat-validator-mcp-production.up.railway.app/subscribe';
 const BUNDLE_500_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
 const BUNDLE_2000_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
@@ -621,6 +623,7 @@ Return ONLY valid JSON with no preamble or markdown:
     let nameMatch = 'NOT_CHECKED';
     let recommendation = 'REVIEW';
     let summary = 'Manual review recommended — AI analysis unavailable.';
+    let aiDegraded = false;
 
     try {
       const aiResponse = await callClaude(prompt);
@@ -632,6 +635,7 @@ Return ONLY valid JSON with no preamble or markdown:
       recommendation = parsed.recommendation || recommendation;
       summary = parsed.summary || summary;
     } catch(e) {
+      aiDegraded = true;
       if (!valid) {
         fraudRiskLevel = 'HIGH';
         fraudRiskScore = 75;
@@ -663,6 +667,8 @@ Return ONLY valid JSON with no preamble or markdown:
       name_match: nameMatch,
       recommendation,
       summary,
+      verdict_ttl: VERDICT_TTL.validate_vat,
+      data_source_status: aiDegraded ? 'partial' : 'full',
       source_url: sourceUrl,
       checked_at: checkedAt,
       _disclaimer: LEGAL_DISCLAIMER,
@@ -683,11 +689,11 @@ Return ONLY valid JSON with no preamble or markdown:
   if (name === 'get_vat_rates') {
     const country_code = args.country_code;
     const checkedAt = nowISO();
-    if (!country_code) return { agent_action: 'PROCEED', rates: VAT_RATES, note: 'VAT rates as of 2026. Verify with official tax authority before use.', source_url: 'taxation-customs.ec.europa.eu/tedb/taxes-list.html', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
+    if (!country_code) return { agent_action: 'PROCEED', rates: VAT_RATES, note: 'VAT rates as of 2026. Verify with official tax authority before use.', verdict_ttl: VERDICT_TTL.get_vat_rates, data_source_status: 'full', source_url: 'taxation-customs.ec.europa.eu/tedb/taxes-list.html', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER };
     const code = country_code.toUpperCase();
     const rate = VAT_RATES[code];
     if (!rate) return { error: 'No VAT rate data for: ' + code + '. Supported: ' + Object.keys(VAT_RATES).join(', '), agent_action: 'PROVIDE_REQUIRED_FIELD', category: 'invalid_input', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10), _disclaimer: LEGAL_DISCLAIMER };
-    return Object.assign({ agent_action: 'PROCEED', country_code: code }, rate, { note: 'Verify current rates with official tax authority before use.', source_url: 'taxation-customs.ec.europa.eu/tedb/taxes-list.html', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER });
+    return Object.assign({ agent_action: 'PROCEED', country_code: code }, rate, { note: 'Verify current rates with official tax authority before use.', verdict_ttl: VERDICT_TTL.get_vat_rates, data_source_status: 'full', source_url: 'taxation-customs.ec.europa.eu/tedb/taxes-list.html', checked_at: checkedAt, _disclaimer: LEGAL_DISCLAIMER });
   }
 
   return { error: 'Unknown tool: ' + name, agent_action: 'RETRY_IN_2_MIN', category: 'unknown_tool', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
@@ -1195,6 +1201,7 @@ const server = http.createServer(async (req, res) => {
               if (access.plan === 'metered' && access.stripeCustomerId) {
                 reportMeteredUsage(access.stripeCustomerId, 'vat_query').catch(() => {});
               }
+              result.calls_remaining = access.paid ? 'unlimited' : Math.max(0, access.remaining || 0);
               response = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
             }
           }
@@ -1310,6 +1317,7 @@ const server = http.createServer(async (req, res) => {
           appendSessionLog(ip, name).catch((e) => console.error('[SessionLog] appendSessionLog failed:', e));
           const result = await executeTool(name, toolArgs || {});
           if (req._accessWarning) result._notice = req._accessWarning;
+          result.calls_remaining = req._accessResult && req._accessResult.paid ? 'unlimited' : Math.max(0, (req._accessResult && req._accessResult.remaining) || 0);
 
           if (req._accessResult && req._accessResult.plan === 'metered' && req._accessResult.stripeCustomerId) {
             reportMeteredUsage(req._accessResult.stripeCustomerId, 'vat_query').catch(() => {});
@@ -1425,6 +1433,7 @@ function setupStdio() {
             response = { jsonrpc: '2.0', id: req.id, result: { content: [{ type: 'text', text: JSON.stringify({ error: 'This tool is temporarily unavailable for maintenance.', agent_action: 'RETRY_IN_30_MIN', retryable: true, retry_after_ms: 1800000 }) }] } };
           } else {
             const result = await executeTool(_name, req.params.arguments || {});
+            result.calls_remaining = 'unlimited';
             response = { jsonrpc: '2.0', id: req.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
           }
         } catch(e) {

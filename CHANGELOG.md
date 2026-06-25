@@ -5,6 +5,11 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.30 — 2026-06-25
+- feat: calls_remaining field added to every successful tool response -- "unlimited" for paid keys, numeric free-tier headroom otherwise
+- feat: verdict_ttl field added to validate_vat (2592000s/30d) and get_vat_rates (604800s/7d) responses
+- feat: data_source_status field added (full/partial) -- validate_vat reports "partial" when AI fraud-risk analysis falls back to default (VIES/HMRC/ABR registry lookup is the critical source and already hard-errors before a verdict is built, so a returned verdict is never "degraded" on this tool); get_vat_rates is always "full" (static lookup table, no external call)
+
 ## v2.0.29 — 2026-06-24
 - feat: unauthenticated /public-stats endpoint -- first_deployed, lifetime tool calls, uptime %, version, for agent orchestrators evaluating server trustworthiness
 - feat: /process-trial-followups endpoint + 24h follow-up record on trial-extension grant

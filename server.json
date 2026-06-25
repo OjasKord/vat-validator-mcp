@@ -3,7 +3,7 @@
   "name": "io.github.OjasKord/vat-validator-mcp",
   "title": "VAT Validator MCP",
   "description": "Validate EU, UK, AU VAT numbers for AI agents. EU ViDA e-invoicing compliance.",
-  "version": "2.0.29",
+  "version": "2.0.30",
   "websiteUrl": "https://kordagencies.com",
   "repository": {
     "url": "https://github.com/OjasKord/vat-validator-mcp",
@@ -13,7 +13,7 @@
     {
       "registryType": "npm",
       "identifier": "vat-validator-mcp",
-      "version": "2.0.29",
+      "version": "2.0.30",
       "transport": {
         "type": "stdio"
       },
