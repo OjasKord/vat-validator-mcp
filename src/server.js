@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.30';
+const VERSION = '2.0.31';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -1076,6 +1076,7 @@ const server = http.createServer(async (req, res) => {
         freeTierUsage.set(monthKey, Math.max(0, currentCalls - TRIAL_EXTENSION_CALLS));
         trialExtensions.set(emailKey, { name, email, use_case: use_case || '', ip, granted_at: nowISO() });
         saveStats();
+        await redisSet(REDIS_PREFIX + ':trial:' + emailNorm, { name, email, use_case: use_case || '', ip, timestamp: nowISO(), server: 'vat-validator-mcp' });
         // 24h follow-up record -- processed by /process-trial-followups (fleet cron)
         await redisSet(REDIS_PREFIX + ':followup:' + emailNorm, { email, name, server: 'vat-validator-mcp', granted_at: nowISO(), sent: false });
         await sendEmail('ojas@kordagencies.com', 'VAT Validator -- Trial Extension: ' + name,

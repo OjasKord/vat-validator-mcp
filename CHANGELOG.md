@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.31 — 2026-06-26
+- fix: trial extension requests now written to Redis (vat:trial:{email}) on grant -- permanent audit trail that survives redeploys; previously in-memory only
+
 ## v2.0.30 — 2026-06-25
 - feat: calls_remaining field added to every successful tool response -- "unlimited" for paid keys, numeric free-tier headroom otherwise
 - feat: verdict_ttl field added to validate_vat (2592000s/30d) and get_vat_rates (604800s/7d) responses
