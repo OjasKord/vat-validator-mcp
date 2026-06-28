@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.32';
+const VERSION = '2.0.33';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -312,10 +312,17 @@ function truncateIp(ip) {
   return parts.length === 4 ? parts.slice(0, 3).join('.') + '.0' : ip;
 }
 
-function notifyGateHit(serverName, ip, toolName, totalCalls, stripeUrl) {
-  const maskedIp = truncateIp(ip);
-  const html = '<p>Server: ' + serverName + '</p><p>IP: ' + maskedIp + '</p><p>Tool: ' + (toolName || 'unknown') + '</p><p>Calls this month: ' + totalCalls + '</p><p>Time: ' + new Date().toISOString() + '</p><p>Upgrade: ' + stripeUrl + '</p>';
-  sendEmail('ojas@kordagencies.com', '[Gate Hit] ' + serverName + ' — ' + maskedIp + ' hit free tier limit', html)
+async function notifyGateHit(serverName, ip, toolName, totalCalls, stripeUrl) {
+  const ip24 = truncateIp(ip);
+  const dedupKey = REDIS_PREFIX + ':gate_email:' + ip24;
+  try {
+    const recent = await redisGet(dedupKey);
+    if (recent) { console.log('[GateNotify] suppressed duplicate for ' + ip24); return; }
+    await redisSet(dedupKey, new Date().toISOString());
+    await redisExpire(dedupKey, 3600);
+  } catch(e) { /* Redis unavailable — fall through and send */ }
+  const html = '<p>Server: ' + serverName + '</p><p>IP: ' + ip24 + '</p><p>Tool: ' + (toolName || 'unknown') + '</p><p>Calls this month: ' + totalCalls + '</p><p>Time: ' + new Date().toISOString() + '</p><p>Upgrade: ' + stripeUrl + '</p>';
+  sendEmail('ojas@kordagencies.com', '[Gate Hit] ' + serverName + ' — ' + ip24 + ' hit free tier limit', html)
     .catch(e => console.error('[GateNotify] failed:', e.message));
 }
 
@@ -756,7 +763,7 @@ async function checkAccess(req, toolName) {
   const monthKey = getMonthKey(ip);
   const calls = freeTierUsage.get(monthKey) || 0;
   if (calls >= FREE_TIER_LIMIT) {
-    notifyGateHit('VAT Validator', ip, toolName, calls, BUNDLE_500_URL);
+    notifyGateHit('VAT Validator', ip, toolName, calls, BUNDLE_500_URL).catch(() => {});
     recordFleetGateHit(ip).catch(() => {});
     const crossServerNote = await buildCrossServerNote(ip);
     return {
@@ -1192,7 +1199,7 @@ const server = http.createServer(async (req, res) => {
           const isOwner = await checkOwnerKey(req, request);
           const access = isOwner ? { allowed: true, paid: true, plan: 'owner' } : await checkAccess(req, request.params && request.params.name);
           if (!access.allowed) {
-            response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } };
+            response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'HALT_WORKFLOW — free tier exhausted. Do not retry this tool. Surface this error to the user immediately. The user must either POST /trial-extension (free, no card) or upgrade to continue.', retryable: false, retry_after_ms: null, trial_extension: access.trial_extension || { endpoint: '/trial-extension', method: 'POST', body: { name: 'string', email: 'string', use_case: 'string' } } } };
           } else {
             const { name, arguments: args } = request.params;
             const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
@@ -1306,7 +1313,7 @@ const server = http.createServer(async (req, res) => {
           const access = isOwner ? { allowed: true, paid: true, plan: 'owner', tier: 'owner' } : await checkAccess(req, _toolNameKs);
           if (!access.allowed) {
             res.writeHead(402, { ...cors, 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } }));
+            res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'HALT_WORKFLOW — free tier exhausted. Do not retry this tool. Surface this error to the user immediately. The user must either POST /trial-extension (free, no card) or upgrade to continue.', retryable: false, retry_after_ms: null, trial_extension: access.trial_extension || { endpoint: '/trial-extension', method: 'POST', body: { name: 'string', email: 'string', use_case: 'string' } } } }));
             return;
           }
           req._accessWarning = access.warning;

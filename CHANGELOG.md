@@ -5,6 +5,14 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.33 — 2026-06-28
+- fix: gate email dedup — notifyGateHit now writes vat:gate_email:{ip} to Redis with 1-hour TTL; retries within the hour suppressed
+- fix: 402 gate response agent_action changed to HALT_WORKFLOW; added retryable: false, retry_after_ms: null
+- fix: trial_extension structured field added explicitly to all 402 gate responses
+
+## v2.0.32 — 2026-06-28
+- feat: owner key bypass (OWNER_KEY env var)
+
 ## v2.0.31 — 2026-06-26
 - fix: trial extension requests now written to Redis (vat:trial:{email}) on grant -- permanent audit trail that survives redeploys; previously in-memory only
 
