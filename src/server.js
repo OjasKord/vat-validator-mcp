@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.31';
+const VERSION = '2.0.32';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -27,6 +27,7 @@ try {
 }
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const OWNER_KEY = process.env.OWNER_KEY || '';
 const PORT = process.env.PORT || 3000;
 const STATS_KEY = process.env.STATS_KEY || 'ojas2026';
 const REDIS_PREFIX = 'vat';
@@ -699,6 +700,15 @@ Return ONLY valid JSON with no preamble or markdown:
   return { error: 'Unknown tool: ' + name, agent_action: 'RETRY_IN_2_MIN', category: 'unknown_tool', retryable: false, retry_after_ms: null, fallback_tool: null, trace_id: Math.random().toString(36).slice(2, 10) };
 }
 
+async function checkOwnerKey(req, requestBody) {
+  if (!OWNER_KEY) return false;
+  const provided = req.headers['x-owner-key'] || (requestBody && requestBody.owner_key) || '';
+  if (provided !== OWNER_KEY) return false;
+  redisIncr(REDIS_PREFIX + ':owner_calls:' + new Date().toISOString().slice(0, 7)).catch(() => {});
+  console.log('[owner] owner key used');
+  return true;
+}
+
 async function checkAccess(req, toolName) {
   const rawIpAll = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   const ipAll = rawIpAll.split(',')[0].trim();
@@ -1179,7 +1189,8 @@ const server = http.createServer(async (req, res) => {
         } else if (request.method === 'prompts/list') {
           response = { jsonrpc: '2.0', id: request.id, result: { prompts: [] } };
         } else if (request.method === 'tools/call') {
-          const access = await checkAccess(req, request.params && request.params.name);
+          const isOwner = await checkOwnerKey(req, request);
+          const access = isOwner ? { allowed: true, paid: true, plan: 'owner' } : await checkAccess(req, request.params && request.params.name);
           if (!access.allowed) {
             response = { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } };
           } else {
@@ -1192,17 +1203,17 @@ const server = http.createServer(async (req, res) => {
             } else if (name === 'validate_vat' && !checkPerMinuteLimit(ip, name, 5)) {
               response = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify({ error: 'Rate limit exceeded — maximum 5 calls per minute per IP on AI-powered tools. Your workflow is calling this tool too rapidly.', agent_action: 'RETRY_IN_60_SEC', retryable: true, retry_after_ms: 60000, limit: 5, window: '1 minute' }) }] } };
             } else {
-              usageLog.push({ tool: name, tier: access.tier || access.plan || 'paid', time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
+              usageLog.push({ tool: name, tier: isOwner ? 'owner' : (access.tier || access.plan || 'paid'), time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
               if (usageLog.length > 1000) usageLog.shift();
               toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
               redisIncr(LIFETIME_CALLS_REDIS_KEY).catch(() => {});
               saveStats();
               appendSessionLog(ip, name).catch((e) => console.error('[SessionLog] appendSessionLog failed:', e));
               const result = await executeTool(name, args || {});
-              if (access.plan === 'metered' && access.stripeCustomerId) {
+              if (!isOwner && access.plan === 'metered' && access.stripeCustomerId) {
                 reportMeteredUsage(access.stripeCustomerId, 'vat_query').catch(() => {});
               }
-              result.calls_remaining = access.paid ? 'unlimited' : Math.max(0, access.remaining || 0);
+              result.calls_remaining = (isOwner || access.paid) ? 'unlimited' : Math.max(0, access.remaining || 0);
               response = { jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } };
             }
           }
@@ -1291,7 +1302,8 @@ const server = http.createServer(async (req, res) => {
             res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify({ error: 'Rate limit exceeded — maximum 5 calls per minute per IP on AI-powered tools. Your workflow is calling this tool too rapidly.', agent_action: 'RETRY_IN_60_SEC', retryable: true, retry_after_ms: 60000, limit: 5, window: '1 minute' }) }] } }));
             return;
           }
-          const access = await checkAccess(req, _toolNameKs);
+          const isOwner = await checkOwnerKey(req, request);
+          const access = isOwner ? { allowed: true, paid: true, plan: 'owner', tier: 'owner' } : await checkAccess(req, _toolNameKs);
           if (!access.allowed) {
             res.writeHead(402, { ...cors, 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'PAUSE_AND_NOTIFY_USER' } }));
