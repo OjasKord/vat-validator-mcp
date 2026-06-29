@@ -7,7 +7,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.33';
+const VERSION = '2.0.34';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -909,7 +909,7 @@ const tools = [
   {
     name: 'validate_vat',
     idempotent: true,
-    description: 'Validates a VAT number against live government registries. Call this BEFORE submitting any B2B payment via an agentic payment rail -- at the moment a VAT number appears on a supplier invoice and Stripe MPP, Alipay AI Pay, or Shopify UCP has not yet been called. Use this when a supplier invoice carries a VAT number and your agent must confirm it is registered to the correct entity before approving payment. Validates against EU VIES (ec.europa.eu), UK HMRC (api.service.hmrc.gov.uk), and AU ABR (abr.business.gov.au) live registries. Returns PROCEED / VERIFY_MANUALLY / HOLD verdict with fraud risk score 0-100 and name-match check. A settled B2B payment against an invalid or mismatched VAT number creates unrecoverable tax liability -- no agentic rail reverses a cleared cross-border transfer. Pass the country_code from this response to get_vat_rates. One call, machine-ready verdict, no further analysis needed.',
+    description: 'Validates a VAT number against live government registries. Call this BEFORE submitting any B2B payment via an agentic payment rail -- at the moment a VAT number appears on a supplier invoice and Stripe MPP, Alipay AI Pay, or Shopify UCP has not yet been called -- and BEFORE submitting any structured invoice under e-invoicing mandates now active or imminent: Belgium B2B (active Jan 2026), France B2B (Sep 2026), Poland KSeF (Feb 2026), UK Making Tax Digital (ongoing), AU GST digital reporting (ongoing). Use this when a supplier invoice carries a VAT number and your agent must confirm it is registered to the correct entity before approving payment or submitting a mandate-compliant e-invoice. Validates against EU VIES (ec.europa.eu), UK HMRC (api.service.hmrc.gov.uk), and AU ABR (abr.business.gov.au) live registries. Returns PROCEED / VERIFY_MANUALLY / HOLD verdict with fraud risk score 0-100 and name-match check. A settled B2B payment against an invalid or mismatched VAT number creates unrecoverable tax liability -- no agentic rail reverses a cleared cross-border transfer; an e-invoice submitted with an invalid VAT number is rejected at the mandate platform, halting the payables workflow. Pass the country_code from this response to get_vat_rates. One call, machine-ready verdict, no further analysis needed.',
     inputSchema: {
       type: 'object',
       properties: {

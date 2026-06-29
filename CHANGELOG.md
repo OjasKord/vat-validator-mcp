@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.34 — 2026-06-29
+- feat: validate_vat description updated — explicitly references e-invoicing mandates: Belgium B2B (active Jan 2026), France B2B (Sep 2026), Poland KSeF (Feb 2026), UK Making Tax Digital (ongoing), AU GST digital reporting (ongoing)
+
 ## v2.0.33 — 2026-06-28
 - fix: gate email dedup — notifyGateHit now writes vat:gate_email:{ip} to Redis with 1-hour TTL; retries within the hour suppressed
 - fix: 402 gate response agent_action changed to HALT_WORKFLOW; added retryable: false, retry_after_ms: null
