@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.35 — 2026-06-29
+- feat: add GET /.well-known/glama.json ownership endpoint for Glama registry verification
+
 ## v2.0.34 — 2026-06-29
 - feat: validate_vat description updated — explicitly references e-invoicing mandates: Belgium B2B (active Jan 2026), France B2B (Sep 2026), Poland KSeF (Feb 2026), UK Making Tax Digital (ongoing), AU GST digital reporting (ongoing)
 
