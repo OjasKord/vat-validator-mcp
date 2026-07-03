@@ -2,12 +2,11 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.35';
+const VERSION = '2.0.37';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -16,15 +15,6 @@ const UPTIME_HEARTBEAT_INTERVAL_MS = 60000;
 const FLEET_IP24_TTL_SECONDS = 30 * 24 * 60 * 60;
 const FLEET_CROSS_SERVER_THRESHOLD = 3;
 
-// Persistent device ID for HMRC fraud prevention headers (BATCH_PROCESS_DIRECT)
-const DEVICE_ID_FILE = path.join(__dirname, '..', 'device-id.txt');
-let DEVICE_ID;
-try {
-  DEVICE_ID = fs.readFileSync(DEVICE_ID_FILE, 'utf8').trim();
-} catch(e) {
-  DEVICE_ID = crypto.randomUUID();
-  try { fs.writeFileSync(DEVICE_ID_FILE, DEVICE_ID); } catch(we) {}
-}
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const OWNER_KEY = process.env.OWNER_KEY || '';
@@ -364,90 +354,6 @@ async function validateVIES(countryCode, vatNumber) {
   });
 }
 
-async function hmrcFetchWithRetry(url, options, maxRetries = 3) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    const response = await fetch(url, options);
-    if (response.status !== 429) return response;
-    if (attempt === maxRetries) return response;
-    await new Promise(resolve => setTimeout(resolve, attempt * 1000));
-  }
-}
-
-function getFraudPreventionHeaders() {
-  return {
-    'Gov-Client-Connection-Method': 'BATCH_PROCESS_DIRECT',
-    'Gov-Client-Device-ID': DEVICE_ID,
-    'Gov-Client-Local-IPs': '127.0.0.1',
-    'Gov-Client-Local-IPs-Timestamp': new Date().toISOString().replace(/(\.\d{3})\d*Z/, '$1Z'),
-    'Gov-Client-MAC-Addresses': 'not-applicable',
-    'Gov-Client-Timezone': 'UTC+00:00',
-    'Gov-Client-User-Agent': 'os-family=Linux&os-version=Server&device-manufacturer=Railway&device-model=Cloud',
-    'Gov-Client-User-IDs': 'os=railway-service',
-    'Gov-Vendor-License-IDs': 'vat-validator-mcp=not-applicable',
-    'Gov-Vendor-Product-Name': 'VAT%20Validator%20MCP',
-    'Gov-Vendor-Version': 'vat-validator-mcp=2.0.3'
-  };
-}
-
-// HMRC OAuth 2.0 token cache
-let hmrcToken = null;
-let hmrcTokenExpiry = 0;
-
-async function getHMRCToken() {
-  const now = Date.now();
-  // Refresh if missing or within 5 minutes of expiry
-  if (hmrcToken && now < hmrcTokenExpiry - 300000) return hmrcToken;
-
-  const clientId = process.env.HMRC_CLIENT_ID || '';
-  const clientSecret = process.env.HMRC_CLIENT_SECRET || '';
-  const sandbox = process.env.HMRC_SANDBOX === 'true';
-  const hostname = sandbox ? 'test-api.service.hmrc.gov.uk' : 'api.service.hmrc.gov.uk';
-
-  if (!clientId || !clientSecret) return null;
-
-  const body = `client_secret=${encodeURIComponent(clientSecret)}&client_id=${encodeURIComponent(clientId)}&grant_type=client_credentials&scope=read%3Avat`;
-
-  try {
-    const response = await hmrcFetchWithRetry(`https://${hostname}/oauth/token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...getFraudPreventionHeaders() },
-      body,
-      signal: AbortSignal.timeout(8000)
-    });
-    const json = await response.json();
-    if (json.access_token) {
-      hmrcToken = json.access_token;
-      hmrcTokenExpiry = now + (json.expires_in || 14400) * 1000;
-      return hmrcToken;
-    }
-    return null;
-  } catch(e) {
-    return null;
-  }
-}
-
-async function validateHMRC(vatNumber) {
-  const clean = vatNumber.replace(/^GB/i, '').replace(/\s/g, '');
-  const token = await getHMRCToken();
-  if (!token) return { source: 'HMRC', error: 'HMRC credentials not configured' };
-
-  const sandbox = process.env.HMRC_SANDBOX === 'true';
-  const hostname = sandbox ? 'test-api.service.hmrc.gov.uk' : 'api.service.hmrc.gov.uk';
-
-  try {
-    const response = await hmrcFetchWithRetry(`https://${hostname}/organisations/vat/check-vat-number/lookup/${clean}`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/vnd.hmrc.2.0+json', 'Authorization': 'Bearer ' + token, ...getFraudPreventionHeaders() },
-      signal: AbortSignal.timeout(8000)
-    });
-    const data = await response.json();
-    return { source: 'HMRC', status: response.status, data };
-  } catch(e) {
-    if (e.name === 'TimeoutError' || e.name === 'AbortError') return { source: 'HMRC', error: 'Timeout' };
-    return { source: 'HMRC', error: e.message };
-  }
-}
-
 async function validateABN(abn) {
   return new Promise((resolve) => {
     const clean = abn.replace(/\s/g, '');
@@ -472,7 +378,6 @@ async function validateABN(abn) {
 
 function detectCountry(vatNumber) {
   const clean = vatNumber.trim().toUpperCase().replace(/\s/g, '');
-  if (clean.startsWith('GB')) return { country: 'GB', type: 'uk', number: clean.slice(2) };
   if (clean.startsWith('ABN')) return { country: 'AU', type: 'au', number: clean.slice(3) };
   if (clean.startsWith('AU') || /^\d{11}$/.test(clean)) return { country: 'AU', type: 'au', number: clean };
   const euCodes = ['AT','BE','BG','CY','CZ','DE','DK','EE','EL','ES','FI','FR','HR','HU','IE','IT','LT','LU','LV','MT','NL','PL','PT','RO','SE','SI','SK'];
@@ -482,7 +387,7 @@ function detectCountry(vatNumber) {
   return { country: null, type: 'unknown', number: clean };
 }
 
-const LEGAL_DISCLAIMER = 'Results sourced directly from official government VAT registries (EU VIES, UK HMRC, Australian ABR). We do not log or store your query content. Results are for informational purposes only and do not constitute legal or tax advice. Operator must independently verify all results with a qualified tax advisor before making compliance decisions. Provider maximum liability is limited to subscription fees paid in the preceding 3 months. Full terms: kordagencies.com/terms.html';
+const LEGAL_DISCLAIMER = 'Results sourced directly from official government VAT registries (EU VIES, Australian ABR). We do not log or store your query content. Results are for informational purposes only and do not constitute legal or tax advice. Operator must independently verify all results with a qualified tax advisor before making compliance decisions. Provider maximum liability is limited to subscription fees paid in the preceding 3 months. Full terms: kordagencies.com/terms.html';
 
 const VAT_RATES = {
   AT:{standard:20,reduced:[10,13],country:'Austria'},BE:{standard:21,reduced:[6,12],country:'Belgium'},
@@ -524,31 +429,7 @@ async function executeTool(name, args) {
     let jurisdiction = '';
     let sourceUrl = '';
 
-    if (detected.type === 'uk') {
-      jurisdiction = 'UK';
-      sourceUrl = 'api.service.hmrc.gov.uk';
-      const result = await validateHMRC(detected.number);
-      if (result.error) return {
-        error: result.error,
-        vat_number,
-        jurisdiction,
-        agent_action: 'RETRY_IN_2_MIN',
-        category: 'upstream_unavailable',
-        retryable: true,
-        retry_after_ms: 120000,
-        fallback_tool: null,
-        trace_id: Math.random().toString(36).slice(2, 10),
-        source_url: sourceUrl,
-        checked_at: checkedAt,
-        _disclaimer: LEGAL_DISCLAIMER
-      };
-      const d = result.data;
-      if (result.status === 200 && d.target) {
-        valid = true;
-        company_name = d.target.name || null;
-        address = d.target.address ? Object.values(d.target.address).filter(Boolean).join(', ') : null;
-      }
-    } else if (detected.type === 'eu') {
+    if (detected.type === 'eu') {
       jurisdiction = 'EU';
       sourceUrl = 'ec.europa.eu/taxation_customs/vies';
       const result = await validateVIES(detected.country, detected.number);
@@ -593,7 +474,7 @@ async function executeTool(name, args) {
       company_name = d.EntityName || null;
     } else {
       return {
-        error: 'Could not detect country. Supported prefixes: EU (AT BE BG CY CZ DE DK EE EL ES FI FR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK), UK (GB), Australia (AU or ABN).',
+        error: 'Could not detect country. Supported prefixes: EU (AT BE BG CY CZ DE DK EE EL ES FI FR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK), Australia (AU or ABN).',
         vat_number,
         agent_action: 'PROVIDE_COUNTRY_PREFIX',
         category: 'invalid_input',
@@ -909,11 +790,11 @@ const tools = [
   {
     name: 'validate_vat',
     idempotent: true,
-    description: 'Validates a VAT number against live government registries. Call this BEFORE submitting any B2B payment via an agentic payment rail -- at the moment a VAT number appears on a supplier invoice and Stripe MPP, Alipay AI Pay, or Shopify UCP has not yet been called -- and BEFORE submitting any structured invoice under e-invoicing mandates now active or imminent: Belgium B2B (active Jan 2026), France B2B (Sep 2026), Poland KSeF (Feb 2026), UK Making Tax Digital (ongoing), AU GST digital reporting (ongoing). Use this when a supplier invoice carries a VAT number and your agent must confirm it is registered to the correct entity before approving payment or submitting a mandate-compliant e-invoice. Validates against EU VIES (ec.europa.eu), UK HMRC (api.service.hmrc.gov.uk), and AU ABR (abr.business.gov.au) live registries. Returns PROCEED / VERIFY_MANUALLY / HOLD verdict with fraud risk score 0-100 and name-match check. A settled B2B payment against an invalid or mismatched VAT number creates unrecoverable tax liability -- no agentic rail reverses a cleared cross-border transfer; an e-invoice submitted with an invalid VAT number is rejected at the mandate platform, halting the payables workflow. Pass the country_code from this response to get_vat_rates. One call, machine-ready verdict, no further analysis needed.',
+    description: 'Validates a VAT number against live government registries. Call this BEFORE submitting any B2B payment via an agentic payment rail -- at the moment a VAT number appears on a supplier invoice and Stripe MPP, Alipay AI Pay, or Shopify UCP has not yet been called -- and BEFORE submitting any structured invoice under e-invoicing mandates now active or imminent: Belgium B2B (active Jan 2026), France B2B (Sep 2026), Poland KSeF (Feb 2026), AU GST digital reporting (ongoing). Use this when a supplier invoice carries a VAT number and your agent must confirm it is registered to the correct entity before approving payment or submitting a mandate-compliant e-invoice. Validates against EU VIES (ec.europa.eu, 27 member states) and AU ABR (abr.business.gov.au) live registries. Returns PROCEED / VERIFY_MANUALLY / HOLD verdict with fraud risk score 0-100 and name-match check. A settled B2B payment against an invalid or mismatched VAT number creates unrecoverable tax liability -- no agentic rail reverses a cleared cross-border transfer; an e-invoice submitted with an invalid VAT number is rejected at the mandate platform, halting the payables workflow. Pass the country_code from this response to get_vat_rates. One call, machine-ready verdict, no further analysis needed.',
     inputSchema: {
       type: 'object',
       properties: {
-        vat_number: { type: 'string', description: 'VAT number with country prefix. EU: DE123456789. UK: GB123456789. AU: ABN12345678901.' },
+        vat_number: { type: 'string', description: 'VAT number with country prefix. EU: DE123456789. AU: ABN12345678901.' },
         invoice_company_name: { type: 'string', description: 'Company name as it appears on the invoice — if provided, cross-checks against registry and flags mismatches.' },
         invoice_amount: { type: 'number', description: 'Invoice amount in local currency — used in fraud risk weighting.' }
       },
@@ -925,7 +806,7 @@ const tools = [
         agent_action: { type: 'string', enum: ['PROCEED', 'VERIFY_MANUALLY', 'HOLD'], description: 'Machine-readable verdict' },
         valid: { type: 'boolean', description: 'Whether the VAT number is currently registered and active per the source registry' },
         vat_number: { type: 'string' },
-        jurisdiction: { type: 'string', enum: ['UK', 'EU', 'AU'] },
+        jurisdiction: { type: 'string', enum: ['EU', 'AU'] },
         company_name: { type: ['string', 'null'] },
         address: { type: ['string', 'null'] },
         fraud_risk_score: { type: 'number', minimum: 0, maximum: 100 },
@@ -985,8 +866,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url === '/ready' && (req.method === 'GET' || req.method === 'HEAD')) {
-    const checks = { anthropic: !!ANTHROPIC_API_KEY, hmrc_client_id: !!(process.env.HMRC_CLIENT_ID), hmrc_client_secret: !!(process.env.HMRC_CLIENT_SECRET) };
-    const ready = checks.anthropic && checks.hmrc_client_id && checks.hmrc_client_secret;
+    const checks = { anthropic: !!ANTHROPIC_API_KEY };
+    const ready = checks.anthropic;
     res.writeHead(ready ? 200 : 503, { ...cors, 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: ready ? 'ready' : 'not_ready', version: VERSION, checks }));
     return;
@@ -1002,14 +883,13 @@ const server = http.createServer(async (req, res) => {
       r.setTimeout(5000, () => { r.destroy(); resolve({ ok: false, status: 0, error: 'timeout' }); });
       r.end();
     });
-    const [vies, hmrc, abr, ai] = await Promise.all([
+    const [vies, abr, ai] = await Promise.all([
       depCheck('ec.europa.eu', '/taxation_customs/vies/rest-api/ms/DE/vat/123456789'),
-      getHMRCToken().then(t => t ? { ok: true, status: 200, note: 'OAuth token acquired' } : { ok: false, status: 0, error: 'token fetch failed' }),
       depCheck('abr.business.gov.au', '/json/?abn=12345678901&guid=' + (process.env.ABR_GUID || 'f7b75e2e-6d6a-4c1c-a8d4-5b2e3c9d8f4a')),
       depCheck('api.anthropic.com', '/v1/models', { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' })
     ]);
     res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ server: 'vat-validator-mcp', checked_at: nowISO(), dependencies: { vies, hmrc, abr, anthropic: ai } }));
+    res.end(JSON.stringify({ server: 'vat-validator-mcp', checked_at: nowISO(), dependencies: { vies, abr, anthropic: ai } }));
     return;
   }
 
@@ -1192,7 +1072,7 @@ const server = http.createServer(async (req, res) => {
         const request = JSON.parse(body);
         let response;
         if (request.method === 'initialize') {
-          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES, UK HMRC, and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
+          response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
         } else if (request.method === 'notifications/initialized') {
           res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') {
@@ -1326,7 +1206,7 @@ const server = http.createServer(async (req, res) => {
           req._tier = access.tier;
           req._accessResult = access;
         }
-        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES, UK HMRC, and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
+        if (request.method === 'initialize') { response = { jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
         } else if (request.method === 'notifications/initialized') { res.writeHead(204, cors); res.end(); return;
         } else if (request.method === 'tools/list') { response = { jsonrpc: '2.0', id: request.id, result: { tools } };
         } else if (request.method === 'resources/list') { response = { jsonrpc: '2.0', id: request.id, result: { resources: [] } };
@@ -1374,7 +1254,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: VERSION, status: 'ok', tools: 2, free_tier: '50 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, UK HMRC, Australian ABN.', subscribe_url: METERED_SUBSCRIBE_URL, bundle_500_url: BUNDLE_500_URL, bundle_2000_url: BUNDLE_2000_URL })); return; }
+  if (req.method === 'GET' && req.url === '/') { res.writeHead(200, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ name: 'vat-validator-mcp', version: VERSION, status: 'ok', tools: 2, free_tier: '50 calls/month, no API key required', description: 'VAT validation + AI fraud detection. EU VIES, Australian ABN.', subscribe_url: METERED_SUBSCRIBE_URL, bundle_500_url: BUNDLE_500_URL, bundle_2000_url: BUNDLE_2000_URL })); return; }
 
   if (req.url === '/subscribe' && req.method === 'GET') {
     try {
@@ -1442,7 +1322,7 @@ function setupStdio() {
       try { req = JSON.parse(line); } catch(e) { return; }
       let response;
       if (req.method === 'initialize') {
-        response = { jsonrpc: '2.0', id: req.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES, UK HMRC, and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
+        response = { jsonrpc: '2.0', id: req.id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'vat-validator-mcp', version: VERSION, description: 'Every B2B payment workflow built on Stripe MPP, Alipay AI Pay, or Shopify UCP has a moment where the agent must validate a supplier VAT number before authorising transfer. This server answers that question in one call -- validating against live EU VIES and AU ABR government registries and returning a machine-ready PROCEED / VERIFY_MANUALLY / HOLD verdict. Used before any invoice approval or payment rail invocation.' } } };
       } else if (req.method === 'notifications/initialized') {
         return;
       } else if (req.method === 'tools/list') {

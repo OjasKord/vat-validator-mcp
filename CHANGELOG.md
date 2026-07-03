@@ -5,6 +5,9 @@ Format: version number, date, what changed.
 
 ---
 
+## v2.0.37 — 2026-07-03
+- Removed HMRC UK VAT integration — outside permitted use scope
+
 ## v2.0.35 — 2026-06-29
 - feat: add GET /.well-known/glama.json ownership endpoint for Glama registry verification
 
