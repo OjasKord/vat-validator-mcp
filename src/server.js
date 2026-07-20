@@ -6,7 +6,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.37';
+const VERSION = '2.0.38';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -105,9 +105,9 @@ async function redisGet(key) {
 
 async function redisSet(key, value) {
   try {
-    const res = await fetch(`${process.env.UPSTASH_REDIS_REST_URL}/set/${encodeURIComponent(key)}/${encodeURIComponent(JSON.stringify(value))}`, {
+    const res = await fetch(`${UPSTASH_URL}/set/${encodeURIComponent(key)}/${encodeURIComponent(JSON.stringify(value))}`, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${process.env.UPSTASH_REDIS_REST_TOKEN}` }
+      headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
     });
     const data = await res.json();
     if (data.error) console.error('[Redis] redisSet error:', data.error, 'key:', key);
