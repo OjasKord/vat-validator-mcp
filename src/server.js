@@ -6,7 +6,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.38';
+const VERSION = '2.0.39';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -248,6 +248,38 @@ async function saveFreeTierToRedis() {
   } catch(e) { console.error('[FreeTier] save failed:', e); }
 }
 
+const USAGE_LOG_REDIS_KEY = REDIS_PREFIX + ':usage_log';
+const TOOL_USAGE_COUNTS_REDIS_KEY = REDIS_PREFIX + ':tool_usage_counts';
+
+async function loadUsageStatsFromRedis() {
+  try {
+    const log = await redisGet(USAGE_LOG_REDIS_KEY);
+    if (Array.isArray(log)) usageLog.push(...log);
+    const counts = await redisGet(TOOL_USAGE_COUNTS_REDIS_KEY);
+    if (counts && typeof counts === 'object') Object.assign(toolUsageCounts, counts);
+    console.log('[UsageStats] Loaded ' + usageLog.length + ' log entries, ' + Object.keys(toolUsageCounts).length + ' tool counters from Redis');
+  } catch(e) { console.error('[UsageStats] load failed:', e); }
+}
+
+// Fire-and-forget — redisSet already catches its own errors internally, so
+// this never blocks or throws on the calling request path.
+function saveUsageStatsToRedis() {
+  redisSet(USAGE_LOG_REDIS_KEY, usageLog.slice(-1000)).catch(() => {});
+  redisSet(TOOL_USAGE_COUNTS_REDIS_KEY, toolUsageCounts).catch(() => {});
+}
+
+// Gate hits (free-tier exhausted, bundle exhausted) return before the normal
+// success-path counters run — this makes them visible as EVENTS to
+// /daily-report and /stats without touching freeTierUsage/quota logic.
+function recordGatedCall(ip, toolName) {
+  usageLog.push({ tool: toolName, tier: 'gated', time: new Date().toISOString(), ip: (ip || 'unknown').slice(0, 8) + '...' });
+  if (usageLog.length > 1000) usageLog.shift();
+  toolUsageCounts[toolName] = (toolUsageCounts[toolName] || 0) + 1;
+  saveStats();
+  saveUsageStatsToRedis();
+  appendSessionLog(ip, toolName).catch((e) => console.error('[SessionLog] appendSessionLog failed:', e));
+}
+
 function generateApiKey() { return 'vat_' + crypto.randomBytes(24).toString('hex'); }
 function getPlanFromProduct(productName) {
   if (!productName) return 'bundle_500';
@@ -302,18 +334,20 @@ function truncateIp(ip) {
   return parts.length === 4 ? parts.slice(0, 3).join('.') + '.0' : ip;
 }
 
-async function notifyGateHit(serverName, ip, toolName, totalCalls, stripeUrl) {
-  const ip24 = truncateIp(ip);
-  const dedupKey = REDIS_PREFIX + ':gate_email:' + ip24;
-  try {
-    const recent = await redisGet(dedupKey);
-    if (recent) { console.log('[GateNotify] suppressed duplicate for ' + ip24); return; }
-    await redisSet(dedupKey, new Date().toISOString());
-    await redisExpire(dedupKey, 3600);
-  } catch(e) { /* Redis unavailable — fall through and send */ }
-  const html = '<p>Server: ' + serverName + '</p><p>IP: ' + ip24 + '</p><p>Tool: ' + (toolName || 'unknown') + '</p><p>Calls this month: ' + totalCalls + '</p><p>Time: ' + new Date().toISOString() + '</p><p>Upgrade: ' + stripeUrl + '</p>';
-  sendEmail('ojas@kordagencies.com', '[Gate Hit] ' + serverName + ' — ' + ip24 + ' hit free tier limit', html)
-    .catch(e => console.error('[GateNotify] failed:', e.message));
+// Redis-independent circuit breaker for the email paths that remain after
+// raw gate-hit emails were removed 2026-07-27 (trial-extension request +
+// payment events only). Caps total sends server-wide so a flood of fake
+// trial-extension requests can't exhaust the fleet's shared Resend quota
+// even if Redis-backed dedup elsewhere is unavailable (Lesson 209).
+const EMAIL_CIRCUIT_BREAKER_LIMIT = 20;
+let emailBreakerCount = 0;
+let emailBreakerWindowStart = Date.now();
+function emailCircuitBreakerAllow() {
+  const now = Date.now();
+  if (now - emailBreakerWindowStart > 3600000) { emailBreakerWindowStart = now; emailBreakerCount = 0; }
+  if (emailBreakerCount >= EMAIL_CIRCUIT_BREAKER_LIMIT) return false;
+  emailBreakerCount++;
+  return true;
 }
 
 async function sendApiKeyEmail(email, apiKey, plan) {
@@ -624,6 +658,7 @@ async function checkAccess(req, toolName) {
     }
 
     if (record.calls >= record.limit) {
+      recordGatedCall(ipAll, toolName);
       recordFleetGateHit(ipAll).catch(() => {});
       const crossServerNote = await buildCrossServerNote(ipAll);
       return {
@@ -644,7 +679,7 @@ async function checkAccess(req, toolName) {
   const monthKey = getMonthKey(ip);
   const calls = freeTierUsage.get(monthKey) || 0;
   if (calls >= FREE_TIER_LIMIT) {
-    notifyGateHit('VAT Validator', ip, toolName, calls, BUNDLE_500_URL).catch(() => {});
+    recordGatedCall(ip, toolName);
     recordFleetGateHit(ip).catch(() => {});
     const crossServerNote = await buildCrossServerNote(ip);
     return {
@@ -729,7 +764,11 @@ async function handleStripeWebhook(body, sig) {
       apiKeys.set(apiKey, record);
       await saveKeyToRedis(apiKey, record, REDIS_PREFIX);
       if (record.email && record.email !== 'unknown') {
-        await sendApiKeyEmail(record.email, apiKey, plan);
+        if (emailCircuitBreakerAllow()) {
+          await sendApiKeyEmail(record.email, apiKey, plan);
+        } else {
+          console.error('[EmailBreaker] suppressed API key delivery email for ' + record.email + ' — hourly cap reached, key is still valid, follow up manually');
+        }
       } else {
         console.error('[vat] No customer email in webhook — skipping email send');
       }
@@ -976,10 +1015,14 @@ const server = http.createServer(async (req, res) => {
         await redisSet(REDIS_PREFIX + ':trial:' + emailNorm, { name, email, use_case: use_case || '', ip, timestamp: nowISO(), server: 'vat-validator-mcp' });
         // 24h follow-up record -- processed by /process-trial-followups (fleet cron)
         await redisSet(REDIS_PREFIX + ':followup:' + emailNorm, { email, name, server: 'vat-validator-mcp', granted_at: nowISO(), sent: false });
-        await sendEmail('ojas@kordagencies.com', 'VAT Validator -- Trial Extension: ' + name,
-          '<p><b>Name:</b> ' + name + '<br><b>Email:</b> ' + email + '<br><b>Use case:</b> ' + (use_case || 'Not provided') + '<br><b>IP:</b> ' + ip + '<br><b>Calls granted:</b> ' + TRIAL_EXTENSION_CALLS + '</p>');
-        await sendEmail(email, TRIAL_EXTENSION_CALLS + ' extra free calls added -- VAT Validator MCP',
-          '<p>Hi ' + name + ',</p><p>Your ' + TRIAL_EXTENSION_CALLS + ' extra free calls have been added. You can keep using VAT Validator MCP right now -- no action needed.</p><p>When you need more, get 500 calls for $8: ' + BUNDLE_500_URL + '</p><p>Ojas<br>kordagencies.com</p>');
+        if (emailCircuitBreakerAllow()) {
+          await sendEmail('ojas@kordagencies.com', 'VAT Validator -- Trial Extension: ' + name,
+            '<p><b>Name:</b> ' + name + '<br><b>Email:</b> ' + email + '<br><b>Use case:</b> ' + (use_case || 'Not provided') + '<br><b>IP:</b> ' + ip + '<br><b>Calls granted:</b> ' + TRIAL_EXTENSION_CALLS + '</p>');
+        } else { console.log('[EmailBreaker] suppressed trial-extension notify — hourly cap reached'); }
+        if (emailCircuitBreakerAllow()) {
+          await sendEmail(email, TRIAL_EXTENSION_CALLS + ' extra free calls added -- VAT Validator MCP',
+            '<p>Hi ' + name + ',</p><p>Your ' + TRIAL_EXTENSION_CALLS + ' extra free calls have been added. You can keep using VAT Validator MCP right now -- no action needed.</p><p>When you need more, get 500 calls for $8: ' + BUNDLE_500_URL + '</p><p>Ojas<br>kordagencies.com</p>');
+        } else { console.log('[EmailBreaker] suppressed trial-extension confirmation — hourly cap reached'); }
         res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ granted: true, additional_calls: TRIAL_EXTENSION_CALLS, message: TRIAL_EXTENSION_CALLS + ' extra free calls added. Check your email for confirmation.', bundle_url: BUNDLE_500_URL }));
       } catch(e) { res.writeHead(400, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.message, agent_action: 'RETRY_IN_2_MIN' })); }
@@ -1005,11 +1048,11 @@ const server = http.createServer(async (req, res) => {
         const hasPaidKey = Array.from(apiKeys.values()).some(r => (r.email || '').toLowerCase().trim() === emailNorm);
         if (hasPaidKey) {
           skippedPaid++;
-        } else {
+        } else if (emailCircuitBreakerAllow()) {
           await sendEmail(record.email, 'VAT Validator MCP -- VAT verification will block your invoice workflow again without an upgrade',
             '<p>Hi ' + record.name + ',</p><p>Your trial extension on VAT Validator MCP was granted 24 hours ago. Once those extra calls run out, VAT verification stops and any invoice-approval workflow that depends on it pauses until you upgrade.</p><p>Upgrade now -- 500 calls for $8, never expire: ' + BUNDLE_500_URL + '</p><p>Ojas<br>kordagencies.com</p>');
           sent++;
-        }
+        } else { console.log('[EmailBreaker] suppressed trial-followup — hourly cap reached'); }
         record.sent = true;
         record.sent_at = nowISO();
         await redisSet(key, record);
@@ -1101,6 +1144,7 @@ const server = http.createServer(async (req, res) => {
               toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
               redisIncr(LIFETIME_CALLS_REDIS_KEY).catch(() => {});
               saveStats();
+              saveUsageStatsToRedis();
               appendSessionLog(ip, name).catch((e) => console.error('[SessionLog] appendSessionLog failed:', e));
               const result = await executeTool(name, args || {});
               if (!isOwner && access.plan === 'metered' && access.stripeCustomerId) {
@@ -1133,8 +1177,11 @@ const server = http.createServer(async (req, res) => {
       const cutoffMs = Date.now() - 86400000;
 
       const recentLog = usageLog.filter(e => e.time >= since24h);
-      const calls24h = recentLog.length;
-      const unique24h = new Set(recentLog.map(e => e.ip)).size;
+      const successLog = recentLog.filter(e => e.tier !== 'gated');
+      const gatedLog = recentLog.filter(e => e.tier === 'gated');
+      const calls24h = successLog.length;
+      const gateHits24h = gatedLog.length;
+      const unique24h = new Set(successLog.map(e => e.ip)).size;
 
       const limitIPs = new Set();
       for (const [key, count] of freeTierUsage.entries()) {
@@ -1164,6 +1211,7 @@ const server = http.createServer(async (req, res) => {
         server: 'vat-validator-mcp',
         date: today,
         calls_24h: calls24h,
+        gate_hits_24h: gateHits24h,
         unique_ips_24h: unique24h,
         limit_hits: limitIPs.size,
         trial_extensions: trialCount,
@@ -1220,6 +1268,7 @@ const server = http.createServer(async (req, res) => {
           toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
           redisIncr(LIFETIME_CALLS_REDIS_KEY).catch(() => {});
           saveStats();
+          saveUsageStatsToRedis();
           appendSessionLog(ip, name).catch((e) => console.error('[SessionLog] appendSessionLog failed:', e));
           const result = await executeTool(name, toolArgs || {});
           if (req._accessWarning) result._notice = req._accessWarning;
@@ -1364,6 +1413,7 @@ server.listen(PORT, async () => {
   loadStats();
   await loadApiKeysFromRedis('vat');
   await loadFreeTierFromRedis();
+  await loadUsageStatsFromRedis();
   await initUptimeTracking();
   console.log('VAT Validator MCP v' + VERSION + ' running on port ' + PORT);
   console.log('Free tier: ' + FREE_TIER_LIMIT + ' calls/IP/month, no API key required');
