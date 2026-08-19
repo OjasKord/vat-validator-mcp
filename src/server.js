@@ -6,7 +6,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.39';
+const VERSION = '2.0.40';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -349,6 +349,24 @@ function emailCircuitBreakerAllow() {
   emailBreakerCount++;
   return true;
 }
+
+// One trial extension per IP, ever (2026-08-19). Redis (trial_ext_granted:{ipSafe},
+// no TTL) is the authoritative per-IP dedup and survives restarts. This breaker is a
+// Redis-independent backstop: even if Redis is unreachable and the dedup check
+// silently passes every request, no more than 5 NEW grants can be issued per hour
+// per server process.
+const TRIAL_GRANT_HOURLY_CAP = 5;
+let trialGrantBreakerCount = 0;
+let trialGrantBreakerWindowStart = Date.now();
+function trialGrantCircuitBreakerAllow() {
+  const now = Date.now();
+  if (now - trialGrantBreakerWindowStart > 3600000) { trialGrantBreakerWindowStart = now; trialGrantBreakerCount = 0; }
+  if (trialGrantBreakerCount >= TRIAL_GRANT_HOURLY_CAP) return false;
+  trialGrantBreakerCount++;
+  return true;
+}
+
+function ipSafeKey(ip) { return String(ip).replace(/:/g, '_').replace(/\s/g, ''); }
 
 async function sendApiKeyEmail(email, apiKey, plan) {
   const planLabel = plan === 'metered' ? 'Pay-as-you-go' : plan === 'bundle_2000' ? 'Bundle 2000' : 'Bundle 500';
@@ -1005,14 +1023,34 @@ const server = http.createServer(async (req, res) => {
         if (!name || !email) { res.writeHead(400, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'name and email are required', agent_action: 'PROVIDE_REQUIRED_FIELDS' })); return; }
         const emailNorm = email.toLowerCase().trim();
         const emailKey = 'trial:' + emailNorm;
-        if (trialExtensions.has(emailKey)) { res.writeHead(409, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Trial extension already granted for this email.', bundle_url: BUNDLE_500_URL, agent_action: 'INFORM_USER_TRIAL_ALREADY_USED' })); return; }
         const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').split(',')[0].trim();
+        const ipGrantKey = REDIS_PREFIX + ':trial_ext_granted:' + ipSafeKey(ip);
+
+        // One trial extension per IP, ever. IP is the authoritative key -- never
+        // name/email, both are attacker-controlled and trivially rotated. Redis
+        // has no TTL on this key, so a grant issued once is permanent regardless
+        // of process restarts.
+        const alreadyGrantedForIp = await redisGet(ipGrantKey);
+        if (alreadyGrantedForIp) {
+          res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ granted: false, error: 'This IP address has already received its one-time trial extension.', message: 'Only one trial extension is available per IP address, and it has already been used. Upgrade to continue: ' + BUNDLE_500_URL, bundle_url: BUNDLE_500_URL, agent_action: 'HALT_WORKFLOW — trial extension already used for this IP. Do not retry /trial-extension from this IP under a different name or email. Direct the user to the paid upgrade path.' }));
+          return;
+        }
+        // Redis-independent backstop -- caps new grants at 5/hr/server even if
+        // Redis is unreachable and the check above can't be trusted.
+        if (!trialGrantCircuitBreakerAllow()) {
+          res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ granted: false, error: 'Trial extension grants are temporarily rate-limited on this server.', message: 'Please try again in a few minutes, or upgrade now: ' + BUNDLE_500_URL, bundle_url: BUNDLE_500_URL, agent_action: 'RETRY_LATER_OR_UPGRADE' }));
+          return;
+        }
+        if (trialExtensions.has(emailKey)) { res.writeHead(409, { ...cors, 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'Trial extension already granted for this email.', bundle_url: BUNDLE_500_URL, agent_action: 'INFORM_USER_TRIAL_ALREADY_USED' })); return; }
         const monthKey = getMonthKey(ip);
         const currentCalls = freeTierUsage.get(monthKey) || 0;
         freeTierUsage.set(monthKey, Math.max(0, currentCalls - TRIAL_EXTENSION_CALLS));
         trialExtensions.set(emailKey, { name, email, use_case: use_case || '', ip, granted_at: nowISO() });
         saveStats();
         await redisSet(REDIS_PREFIX + ':trial:' + emailNorm, { name, email, use_case: use_case || '', ip, timestamp: nowISO(), server: 'vat-validator-mcp' });
+        await redisSet(ipGrantKey, { name, email, ip, granted_at: nowISO() }); // no TTL -- one per IP, ever
         // 24h follow-up record -- processed by /process-trial-followups (fleet cron)
         await redisSet(REDIS_PREFIX + ':followup:' + emailNorm, { email, name, server: 'vat-validator-mcp', granted_at: nowISO(), sent: false });
         if (emailCircuitBreakerAllow()) {
