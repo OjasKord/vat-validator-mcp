@@ -6,7 +6,7 @@ const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.40';
+const VERSION = '2.0.41';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -377,7 +377,7 @@ async function sendApiKeyEmail(email, apiKey, plan) {
 
 async function callClaude(prompt) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1024, messages: [{ role: 'user', content: prompt }] });
+    const body = JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 500, messages: [{ role: 'user', content: prompt }] });
     const req = https.request({
       hostname: 'api.anthropic.com', path: '/v1/messages', method: 'POST',
       headers: { 'x-api-key': ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }
