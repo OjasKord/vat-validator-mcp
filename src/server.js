@@ -5,8 +5,14 @@ const fs = require('fs');
 const Stripe = require('stripe');
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
+// jose@6 (pulled in transitively by @coinbase/x402 for mainnet CDP auth) is a WebCrypto-only
+// build that references a bare global `crypto`. Node 20+ exposes that global by default; Node
+// 18 (Railway's current runtime) does not unless run with --experimental-global-webcrypto.
+// Polyfilling here is a no-op wherever the global already exists.
+if (!globalThis.crypto) globalThis.crypto = crypto.webcrypto;
+
 const PERSIST_FILE = '/tmp/vat_stats.json';
-const VERSION = '2.0.41';
+const VERSION = '2.0.42';
 const FIRST_DEPLOYED = '2026-04-08T06:05:41Z';
 const LIFETIME_CALLS_REDIS_KEY = 'vat:lifetime_calls';
 const UPTIME_HEARTBEAT_KEY = 'vat:uptime:heartbeat_count';
@@ -29,6 +35,73 @@ const METERED_SUBSCRIBE_URL = 'https://vat-validator-mcp-production.up.railway.a
 const BUNDLE_500_URL = 'https://buy.stripe.com/28EeVceUB06N1ty3teebu0l';
 const BUNDLE_2000_URL = 'https://buy.stripe.com/00w14m7s96vb1ty5Bmebu0m';
 const ALLOWED_PAYMENT_LINK_IDS = ['plink_1TQz5UD6WvRe6sn3I1GPShmC', 'plink_1TQz6rD6WvRe6sn3mqxD0Gy8'];
+
+// ─── X402 (V2) — dual-rail payment gate, testnet + mainnet ─────────────────────
+// Zero-regression contract: every x402 code path below is gated behind X402_ENABLED,
+// which is false unless X402_PAY_TO is set. With it unset, none of this runs. Ported from
+// tender-mcp's proven implementation (live on mainnet as of this port).
+const X402_PAY_TO = process.env.X402_PAY_TO || '';
+const X402_NETWORK_ENV = process.env.X402_NETWORK || 'base-sepolia';
+const X402_CAIP_NETWORK = { 'base-sepolia': 'eip155:84532', 'base': 'eip155:8453' }[X402_NETWORK_ENV] || null;
+const X402_FACILITATOR_URL = { 'base-sepolia': 'https://x402.org/facilitator', 'base': 'https://api.cdp.coinbase.com/platform/v2/x402' }[X402_NETWORK_ENV] || null;
+const X402_ENABLED = !!(X402_PAY_TO && X402_CAIP_NETWORK && X402_FACILITATOR_URL);
+const CDP_API_KEY_ID = process.env.CDP_API_KEY_ID || '';
+const CDP_API_KEY_SECRET = process.env.CDP_API_KEY_SECRET || '';
+const TOOL_PRICES = { validate_vat: '$0.025' };
+
+let x402Server = null;
+// True only once initialize() has genuinely resolved. Dynamic import() (and even the pre-existing
+// testnet initialize() call) are async, so there is a real window after the process starts
+// accepting connections where x402Server exists but isn't ready yet -- checkAccess uses this flag
+// to fail closed on a payment attempt during that window instead of silently treating it as free.
+let x402Ready = false;
+let decodePaymentSignatureHeader, encodePaymentRequiredHeader, encodePaymentResponseHeader, declareDiscoveryExtension;
+if (X402_ENABLED) {
+  const { x402ResourceServer, HTTPFacilitatorClient } = require('@x402/core/server');
+  ({ decodePaymentSignatureHeader, encodePaymentRequiredHeader, encodePaymentResponseHeader } = require('@x402/core/http'));
+  const { registerExactEvmScheme } = require('@x402/evm/exact/server');
+  const bazaarExt = require('@x402/extensions/bazaar');
+  declareDiscoveryExtension = bazaarExt.declareDiscoveryExtension;
+
+  // base-sepolia (testnet): free x402.org facilitator, no auth -- unchanged from tender-mcp's
+  // testnet-only implementation.
+  if (X402_NETWORK_ENV === 'base') {
+    // base (mainnet): CDP's hosted facilitator REQUIRES authenticated verify/settle calls. An
+    // unauthenticated client is silently rejected by CDP, which would look armed but never
+    // actually settle -- fail loudly at startup instead of shipping a dead payment rail.
+    if (!CDP_API_KEY_ID || !CDP_API_KEY_SECRET) {
+      throw new Error('[x402] X402_NETWORK=base requires CDP_API_KEY_ID and CDP_API_KEY_SECRET -- the CDP mainnet facilitator rejects unauthenticated verify/settle calls. Refusing to start with a dead payment rail.');
+    }
+    // @coinbase/x402 pulls in @coinbase/cdp-sdk, whose CJS build require()s jose@6 (ESM-only) --
+    // dynamic import() here (rather than require()) is what lets that resolve under Node's CJS/ESM
+    // interop. The polyfill above ensures jose sees a global `crypto` regardless of which path
+    // loads it, so the same condition never trips whichever way jose gets pulled in.
+    import('@coinbase/x402').then(({ createFacilitatorConfig }) => {
+      x402Server = new x402ResourceServer(new HTTPFacilitatorClient(createFacilitatorConfig(CDP_API_KEY_ID, CDP_API_KEY_SECRET)));
+      registerExactEvmScheme(x402Server, {});
+      x402Server.registerExtension(bazaarExt.bazaarResourceServerExtension);
+      return x402Server.initialize();
+    }).then(() => {
+      x402Ready = true;
+      console.log('[x402] resource server initialized — network=' + X402_CAIP_NETWORK + ' facilitator=' + X402_FACILITATOR_URL);
+    }).catch(e => {
+      console.error('[x402] mainnet facilitator setup failed:', e.message);
+      // A mainnet rail that looks armed (X402_PAY_TO set) but can never verify/settle is worse
+      // than not shipping it at all -- refuse to keep running in that state.
+      process.exit(1);
+    });
+  } else {
+    x402Server = new x402ResourceServer(new HTTPFacilitatorClient({ url: X402_FACILITATOR_URL }));
+    registerExactEvmScheme(x402Server, {});
+    x402Server.registerExtension(bazaarExt.bazaarResourceServerExtension);
+    x402Server.initialize()
+      .then(() => {
+        x402Ready = true;
+        console.log('[x402] resource server initialized — network=' + X402_CAIP_NETWORK + ' facilitator=' + X402_FACILITATOR_URL);
+      })
+      .catch(e => console.error('[x402] initialize failed:', e.message));
+  }
+}
 
 const freeTierUsage = new Map();
 const usageLog = [];
@@ -649,6 +722,37 @@ async function checkOwnerKey(req, requestBody) {
   return true;
 }
 
+async function logX402SettleFailure(details) {
+  const monthKey = REDIS_PREFIX + ':x402_settle_failures:' + new Date().toISOString().slice(0, 7);
+  redisIncr(monthKey).catch(() => {});
+  redisSet(REDIS_PREFIX + ':x402_settle_failure:last', Object.assign({ at: nowISO() }, details)).catch(() => {});
+  console.error('[x402] SETTLE FAILED — not charging, not delivering paid result:', JSON.stringify(details));
+}
+
+// Verifies a payment attached via the PAYMENT-SIGNATURE header. Returns null (not an error) if
+// x402 isn't enabled, the tool isn't priced, no payment header is present, or the payment doesn't
+// verify -- all of these mean "fall through to normal free-tier/gate behaviour", not "reject".
+async function checkX402Payment(req, toolName) {
+  if (!X402_ENABLED) return null;
+  const price = TOOL_PRICES[toolName];
+  if (!price) return null;
+  const sigHeader = req.headers['payment-signature'];
+  if (!sigHeader) return null;
+  let payload;
+  try { payload = decodePaymentSignatureHeader(sigHeader); }
+  catch (e) { return null; }
+  let requirements;
+  try {
+    const built = await x402Server.buildPaymentRequirements({ scheme: 'exact', payTo: X402_PAY_TO, price, network: X402_CAIP_NETWORK, maxTimeoutSeconds: 60 });
+    requirements = built[0];
+  } catch (e) { console.error('[x402] buildPaymentRequirements failed:', e.message); return null; }
+  let verifyResult;
+  try { verifyResult = await x402Server.verifyPayment(payload, requirements); }
+  catch (e) { console.error('[x402] verifyPayment failed:', e.message); return null; }
+  if (!verifyResult || !verifyResult.isValid) return null;
+  return { payload, requirements };
+}
+
 async function checkAccess(req, toolName) {
   const rawIpAll = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
   const ipAll = rawIpAll.split(',')[0].trim();
@@ -693,6 +797,23 @@ async function checkAccess(req, toolName) {
     saveKeyToRedis(apiKey, record, REDIS_PREFIX).catch(() => {});
     return { allowed: true, paid: true, plan: record.plan };
   }
+
+  // x402 rail — only engages when a payment signature is actually attached and verifies.
+  // An absent or invalid payment is NOT a rejection here; it falls straight through to the
+  // existing free-tier accounting below, exactly as if no PAYMENT-SIGNATURE header existed.
+  if (X402_ENABLED && req.headers['payment-signature']) {
+    if (!x402Ready) {
+      // A real payment attempt landed during the async facilitator-init window (or after init
+      // failed and the process is about to exit). Fail closed -- never silently spend the
+      // caller's free tier on what was actually an attempted paid call.
+      return { allowed: false, error: 'Payment rail is still starting up. Retry in a few seconds.', tier: 'x402_not_ready' };
+    }
+    const x402Payment = await checkX402Payment(req, toolName);
+    if (x402Payment) {
+      return { allowed: true, tier: 'x402', paid: true, x402Payment };
+    }
+  }
+
   const ip = ipAll;
   const monthKey = getMonthKey(ip);
   const calls = freeTierUsage.get(monthKey) || 0;
@@ -719,7 +840,8 @@ async function checkAccess(req, toolName) {
         ]
       }
     },
-    agent_action: 'PAUSE_AND_NOTIFY_USER'
+    agent_action: 'PAUSE_AND_NOTIFY_USER',
+    tier: 'free_limit_reached'
   };
   }
   freeTierUsage.set(monthKey, calls + 1);
@@ -910,6 +1032,22 @@ const tools = [
     }
   }
 ];
+
+// ─── X402 BAZAAR DISCOVERY ─────────────────────────────────────────────────────
+// Declared once tool schemas exist above. Only populated when x402 is enabled at all --
+// same zero-regression gate as the rest of the x402 code path (empty object, byte-identical
+// no-op, when X402_PAY_TO is unset).
+const X402_DISCOVERY_EXTENSIONS = {};
+if (X402_ENABLED) {
+  const validateVatTool = tools.find(t => t.name === 'validate_vat');
+  X402_DISCOVERY_EXTENSIONS.validate_vat = declareDiscoveryExtension({
+    toolName: 'validate_vat',
+    description: validateVatTool.description.slice(0, 500),
+    inputSchema: validateVatTool.inputSchema,
+    example: { vat_number: 'DE123456789', invoice_company_name: 'Acme GmbH', invoice_amount: 4200 },
+    output: { example: { agent_action: 'PROCEED', valid: true, vat_number: 'DE123456789', jurisdiction: 'EU', company_name: 'Acme GmbH', fraud_risk_level: 'LOW', recommendation: 'CLEAR' } }
+  });
+}
 
 const sseClients = new Map();
 const server = http.createServer(async (req, res) => {
@@ -1284,7 +1422,18 @@ const server = http.createServer(async (req, res) => {
           const isOwner = await checkOwnerKey(req, request);
           const access = isOwner ? { allowed: true, paid: true, plan: 'owner', tier: 'owner' } : await checkAccess(req, _toolNameKs);
           if (!access.allowed) {
-            res.writeHead(402, { ...cors, 'Content-Type': 'application/json' });
+            const gateHeaders = { ...cors, 'Content-Type': 'application/json' };
+            // x402 envelope: ONLY on the free-tier-exhausted gate, ONLY when X402_PAY_TO is configured.
+            // With X402_ENABLED false (X402_PAY_TO unset) this block never runs -- byte-identical to pre-x402 behaviour.
+            if (X402_ENABLED && access.tier === 'free_limit_reached' && TOOL_PRICES[_toolNameKs]) {
+              try {
+                const built = await x402Server.buildPaymentRequirements({ scheme: 'exact', payTo: X402_PAY_TO, price: TOOL_PRICES[_toolNameKs], network: X402_CAIP_NETWORK, maxTimeoutSeconds: 60 });
+                const paymentRequired = await x402Server.createPaymentRequiredResponse(built, { url: 'https://vat-validator-mcp-production.up.railway.app', description: 'VAT Validator MCP — ' + _toolNameKs, mimeType: 'application/json' }, undefined, X402_DISCOVERY_EXTENSIONS[_toolNameKs]);
+                gateHeaders['PAYMENT-REQUIRED'] = encodePaymentRequiredHeader(paymentRequired);
+                access.payment_rails = ['x402', 'stripe_checkout', 'trial_extension'];
+              } catch (e) { console.error('[x402] failed to build 402 envelope:', e.message); }
+            }
+            res.writeHead(402, gateHeaders);
             res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: { code: -32000, message: access.error || 'Access denied', data: access, agent_action: 'HALT_WORKFLOW — free tier exhausted. Do not retry this tool. Surface this error to the user immediately. The user must either POST /trial-extension (free, no card) or upgrade to continue.', retryable: false, retry_after_ms: null, trial_extension: access.trial_extension || { endpoint: '/trial-extension', method: 'POST', body: { name: 'string', email: 'string', use_case: 'string' } } } }));
             return;
           }
@@ -1301,13 +1450,64 @@ const server = http.createServer(async (req, res) => {
           const { name, arguments: toolArgs } = request.params;
           const rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
           const ip = rawIp.split(',')[0].trim();
-          usageLog.push({ tool: name, tier: req._tier || req._accessResult?.plan || 'paid', time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' });
+          usageLog.push(Object.assign({ tool: name, tier: req._tier || req._accessResult?.plan || 'paid', time: new Date().toISOString(), ip: ip.slice(0, 8) + '...' }, req._tier === 'x402' ? { rail: 'x402' } : {}));
           if (usageLog.length > 1000) usageLog.shift();
           toolUsageCounts[name] = (toolUsageCounts[name] || 0) + 1;
           redisIncr(LIFETIME_CALLS_REDIS_KEY).catch(() => {});
           saveStats();
           saveUsageStatsToRedis();
           appendSessionLog(ip, name).catch((e) => console.error('[SessionLog] appendSessionLog failed:', e));
+
+          if (req._tier === 'x402') {
+            // SDK-idiomatic order: payment already verified in checkAccess. Execute first; only
+            // settle (charge) after a successful run. If the tool throws, cancel the verified-but-
+            // unsettled payment so the reservation is released and the agent is not charged.
+            let x402Result;
+            try {
+              x402Result = await executeTool(name, toolArgs || {});
+            } catch (e) {
+              try {
+                const dispatcher = x402Server.createPaymentCancellationDispatcher(req._accessResult.x402Payment.payload, req._accessResult.x402Payment.requirements);
+                await dispatcher.cancel({ reason: 'handler_threw', error: e.message });
+              } catch (ce) { console.error('[x402] cancel() failed:', ce.message); }
+              console.error('[x402] tool threw — verified payment canceled, not settled, not charged:', e.message);
+              res.writeHead(500, { ...cors, 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify({ error: 'Tool execution failed. Payment was verified but NOT charged — safe to retry.', agent_action: 'RETRY', retryable: true }) }] } }));
+              return;
+            }
+
+            let settleResult;
+            try {
+              settleResult = await x402Server.settlePayment(req._accessResult.x402Payment.payload, req._accessResult.x402Payment.requirements);
+            } catch (e) {
+              settleResult = { success: false, errorMessage: e.message };
+            }
+
+            if (!settleResult || !settleResult.success) {
+              // Tool ran successfully but settlement failed after the fact -- never deliver a result
+              // we couldn't charge for. Discard the result, log loudly (Redis-visible), tell the
+              // agent it's safe to retry (a fresh attempt will re-verify and re-settle from scratch).
+              await logX402SettleFailure({ tool: name, reason: settleResult && settleResult.errorReason, message: settleResult && settleResult.errorMessage });
+              res.writeHead(402, { ...cors, 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify({ error: 'Payment settlement failed after tool execution. No result delivered, no charge applied. Safe to retry.', agent_action: 'RETRY', retryable: true }) }] } }));
+              return;
+            }
+
+            redisIncr(REDIS_PREFIX + ':x402_calls:' + new Date().toISOString().slice(0, 7)).catch(() => {});
+            // Distinct, louder alert for a real x402 settlement -- this is the fleet's key
+            // signal. Never blocks the response; failure here must never affect the
+            // already-settled, already-delivered result.
+            sendEmail(
+              'ojas@kordagencies.com',
+              '[x402 SETTLEMENT] VAT Validator — real payment received',
+              '<p><b>Tool:</b> ' + name + '</p><p><b>Network:</b> ' + X402_CAIP_NETWORK + '</p><p><b>Time:</b> ' + nowISO() + '</p><p><b>Settlement:</b> ' + JSON.stringify(settleResult) + '</p>'
+            ).catch(e => console.error('[x402] settlement alert email failed:', e.message));
+            x402Result.calls_remaining = 'unlimited';
+            res.writeHead(200, { ...cors, 'Content-Type': 'application/json', 'PAYMENT-RESPONSE': encodePaymentResponseHeader(settleResult) });
+            res.end(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: JSON.stringify(x402Result, null, 2) }] } }));
+            return;
+          }
+
           const result = await executeTool(name, toolArgs || {});
           if (req._accessWarning) result._notice = req._accessWarning;
           result.calls_remaining = req._accessResult && req._accessResult.paid ? 'unlimited' : Math.max(0, (req._accessResult && req._accessResult.remaining) || 0);
